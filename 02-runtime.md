@@ -1,86 +1,218 @@
 # Agent 运行、恢复与验证循环
 
-## 1. Task 是基本调度单位
+## 1. Task 是不可变执行契约
 
 每个 Task 至少包含：
 
 ```text
-objective       要改变或发现什么
-inputs          Baseline 和稳定引用
-expected_delta  预期产物
-oracle          如何自动判断结果
-coverage        必须触达的信息面
-effects         允许的外部副作用
-budget          时间、token、分支和产物预算
+task_type       DISCOVER / BUILD / VERIFY / RELEASE / REPAIR
+goal_revision / baseline_id
+objective / inputs / expected_delta
+task_oracle
+coverage_requirement
+requires / produces / invalidates / derived_from_finding
+risk_class / capability_scope
+executor_profile / trust_domain
+allowed_effects
+budget          时间、token、并行、分支和产物预算
 stop            成功、失败和终止条件
 ```
 
-没有 Oracle 的生产 Task 不执行。Oracle 本身若由 AI 生成，也只是候选；硬目标至少需要受保护测试、属性检查、外部回读或真实运行指标中的一种独立信号。
-
-## 2. 运行循环
-
-```text
-Task
-  → Context View
-  → Run / Candidate
-  → deterministic checks
-  → independent verification
-  → counterexample search when needed
-      ├─ Finding → 新修复 Task
-      ├─ Inconclusive → 补证或停止
-      └─ Pass → Product Revision / release
-```
-
-Finding 必须先回到 Runtime 形成新 Task，再启动修复 Agent。Verifier 和发布控制器不能绕过 Task、Context、预算和权限直接命令 Agent。
-
-## 3. 角色按需产生
-
-产品、架构、开发、测试和 Review 都是能力模板：
-
-- 简单修改不需要完整四段流水线；
-- 独立方案有真实探索价值时才 fork；
-- 高风险变更才增加更强对抗和运行验证；
-- 一个 Agent 可以完成多个相邻能力，只要 Gate 仍独立。
-
-## 4. Continue、Resume、Re-enter 与 Fork
-
-| 操作 | 语义 |
+| 类型 | 产出与 Task Oracle |
 |---|---|
-| Continue | 同一短期会话继续当前 Run |
-| Resume | 从同一 branch、同一 Baseline 的 checkpoint 继续 |
-| Re-enter | 换 Agent 接手同一 branch，不继承旧聊天 |
-| Fork | 从不可变 checkpoint 创建隔离候选 branch |
-| Rebase | 从新 Baseline 创建 branch generation，旧 checkpoint 不改写 |
-| Merge | 合成 Candidate Delta；重新验证后才可能成为 Product Revision |
+| DISCOVER | 覆盖要求的信息面，产生可复现 Evidence，并把剩余 Unknown 正确分类 |
+| BUILD | 产生满足结构约束且可封存的 Candidate |
+| VERIFY | 通过受信采集路径产生独立 Evidence，并提出反例和 finding claim；不能自行给出正式 Finding 或 PASS |
+| RELEASE | 准备或观察交付；真实写操作仍由 Release Controller 和 Effect Dispatcher 执行 |
+| REPAIR | 针对一个已去重 Finding 产生新 Candidate 或消除阻塞 Unknown |
 
-Checkpoint 只保存任务游标、Delta 引用、工具 continuation、Coverage、Effect 状态和版本信息。它不保存完整聊天或推理文本，也不提升任何结论的可信度。
+每种 Task 都必须有适合其类型的 Task Oracle。Task `SUCCEEDED` 只表示当前执行契约完成，不表示 Candidate 已通过 Gate，也不表示 Release 健康。AI 生成的 Oracle、测试或图结构仍是提议，受保护部分必须由策略或独立信号确认。
 
-Merge 前比较完整 Baseline 和取消版本；目标、源码、配置、产品或权限任一变化都必须 Rebase 或重新验证。
+## 2. 动态 Task Graph
 
-## 5. 外部副作用
+Planner 或任意 Agent 可以提议 Task 和依赖，只有确定性控制器能够接受并写入权威图。每次扩图至少检查：
 
-所有真实写操作进入 Effect Ledger：
+- `requires` 无环且引用同一有效 Goal/Baseline；
+- 总预算、并行度、分支数和产物预算不超限；
+- capability 和 Effect 没有越过 Boundary；
+- Risk Policy 要求的 VERIFY 和结构性独立性已经存在；
+- 受保护 VERIFY 绑定可信 executor profile，普通 Agent Runner 无权 claim；
+- RELEASE 之前存在当前适用的 PASS Assessment；
+- 相同 Finding、Candidate 和修复策略没有超过次数与 fan-out 上限。
+
+正式 Finding 只能在 finding claim 获得 Claim-subject `PASS` Assessment 后产生，再形成新的 DISCOVER/REPAIR Task。该 Finding 可作为 Candidate Assessment `FAIL/INCONCLUSIVE` 的原因。Verifier、Planner 和发布控制器都不能绕过 Task、Context、预算、权限和状态机直接命令 Agent。Task 是不可变契约；Baseline 改变时创建执行 rebase 的 BUILD/REPAIR Task 并重新 VERIFY，而不是原地修改旧 Task。
+
+## 3. 权威状态机
+
+所有转换由控制器用 `expected_revision` 做 CAS；Agent 只能提交转换请求和输入引用。
 
 ```text
-effect_id
-intent_hash
-idempotency_key
-target
-prepared / dispatched / confirmed / unknown / compensated
-receipt
+Task:
+  WAITING → READY → RUNNING
+  RUNNING → READY（新 Run 重试）| SUCCEEDED | FAILED | BLOCKED
+  任意非终态 → CANCELLED | STALE
+
+Run:
+  QUEUED → CLAIMED → RUNNING → SUCCEEDED | FAILED
+  任意非终态 → CANCELLED；CLAIMED/RUNNING lease 到期 → EXPIRED
+
+Candidate:
+  DRAFT → SEALED → PROMOTED | REJECTED | STALE
+
+Assessment:
+  PENDING → RUNNING → PASS | FAIL | INCONCLUSIVE
+
+Effect:
+  PREPARED → REJECTED | DISPATCHED → CONFIRMED | FAILED | UNKNOWN
+  UNKNOWN --reconcile--> CONFIRMED | FAILED | PREPARED
+  FAILED --证明未执行且策略允许重试--> PREPARED
+  CONFIRMED → COMPENSATING → COMPENSATED | COMPENSATION_FAILED
+
+Release:
+  PREPARED → DEPLOYING → OBSERVING → HEALTHY | FAILED | UNKNOWN
+  HEALTHY | FAILED → ROLLING_BACK → ROLLED_BACK | ROLLBACK_FAILED | UNKNOWN
+  UNKNOWN --按 previous_phase 对账--> 对应阶段的合法状态
+  PREPARED → CANCELLED
 ```
 
-- Resume 和 Retry 复用原幂等键；
-- `unknown` 先查询外部状态，不能直接重发；
+`BLOCKED` 只有原因消除且 Task 契约仍兼容时才能回到 READY。Assessment verdict 保持不可变，输入失效只令 applicability 为 STALE。`UNKNOWN` 必须先 reconcile；只有回读证明副作用未发生，Effect 才能回到 PREPARED。
+
+控制器用 Task revision 原子地将 READY 占位为 RUNNING 并创建唯一 QUEUED Run；`(task_id, active)` 最多一个，显式并行只能创建 Fork child Task。Runner 先取得本地容量，再原子 claim 与自身 attestation、executor profile 和 trust domain 匹配的 Run，并获得 lease 与单调 fencing token；只有可信 VERIFY executor 才挂载受保护材料。数据库记录是事实源，WebSocket、消息通知和轮询只负责唤醒。Task 可以顺序拥有多个 Run，一个 Product Revision 可以有多个环境 Release。
+
+## 4. Sandboxed Runner 与 Capability Broker
+
+每个 Run 使用隔离 workspace、最小 Context View 和 Task 级短期 Capability Grant。Broker 必须把纯读取/隔离本地操作与真实外部写入分流：
+
+```text
+typed tool request
+  → capability + policy + fencing 检查
+      ├─ read / isolated local write
+      │    → 必要时注入短期 Secret → sandbox → 脱敏观察 → Evidence/Coverage
+      └─ shared or external write
+           → 只生成 Effect intent → Controller 创建 Effect
+           → Effect Dispatcher 执行 → receipt
+```
+
+任何会改变 Git 远端、Issue Manager、配置、部署环境或其他共享系统的工具都属于第二条路径，不能以“同步工具调用”绕过 Effect Ledger。隔离 worktree 内的 Candidate 修改不属于外部 Effect。
+
+Broker 是 Agent Runtime 内部安全边界，不是新顶层组件：
+
+- 网络默认拒绝，按 tool、action、target、audience、有效期和预算放行；
+- Agent 只得到不透明工具句柄，拿不到长期 token；
+- 外部文本、评论、Skill 和 Candidate 不能扩张 capability；
+- Producer 能看到 Acceptance Contract、Task Oracle 和 Coverage requirement，但看不到受保护 Gate 的测试夹具、生成器、秘密反例和预期值；Verifier 默认只读 Candidate；
+- 每次工具请求和 Effect dispatch 都重新检查授权；
+- Transcript 只是短期可观测数据，不是可靠 checkpoint 或权威状态。
+
+不同 provider 只是 Runner adapter。产品、架构、开发和 Review 是按需能力模板；一个 Agent 可以执行相邻能力，只要 Assurance 仍保持结构性独立。
+
+## 5. Continue、Resume、Retry、Rerun 与 Fork
+
+续接必须指向确切来源，永不按“最近一次会话”猜测：
+
+| 操作 | 语义与继承规则 |
+|---|---|
+| Continue | 同一有效 lease 下继续当前 Run 和短期会话 |
+| Resume | 旧 Run 已停止；从确切 checkpoint 创建带新 lease/fence 的 Run，复用前重新检查 Baseline 和 Capability |
+| Retry | 针对可重试基础设施失败创建新 Run，记录 `retry_of_run_id`；workdir 可复用，session 仅在未污染且 provider 支持时复用 |
+| Rerun | 显式重新执行，记录 `rerun_of_run_id`；默认使用新 session 和新 workdir |
+| Re-enter | 换 Agent 接手同一有效 branch，不继承旧聊天；新建 Run |
+| Fork | 从确切不可变 checkpoint/Candidate 创建 child Task 和隔离 branch，记录 `fork_of_*`，拥有独立预算与 namespace |
+| Rebase | 基于新 Baseline 创建新 Task 和 branch generation，记录 `rebased_from_task_id`；不改写旧 checkpoint |
+| Merge | 合成 Candidate Delta；重新 Assessment 后才可能晋升 Product Revision |
+
+`session_id` 与 `work_dir` 是两个独立引用。原目录丢失、运行时不同或会话污染时，只能显式降级；provider resume 失败可在同一新 Run 中 fresh fallback，但必须留下事件，不能伪装成成功续接。
+
+Rerun 和 Fork 默认既不继承也不自动重放 Effect。它们再次提出同一 intent 时，控制器先按 `intent_hash + idempotency scope` 查询既有 Effect，再决定复用、拒绝或创建新 Effect；Fork 在 Candidate 被选中并通过 Assessment 前禁止真实外部副作用。
+
+Checkpoint 只保存：
+
+```text
+task/run/source ids + baseline revision
+branch generation + sealed delta ref
+execution cursor + provider continuation ref
+Coverage summary + unresolved Unknown
+Effect ids/states + context manifest ref
+```
+
+它不保存完整聊天或推理文本，也不提高任何 Claim 的可信度。
+
+## 6. Lease、fencing 与失效
+
+所有可变记录都有 revision。Run claim 产生单调 fencing token；heartbeat、checkpoint、result、Candidate seal 以及 Run 来源的 Effect intent 都必须携带当前 token。lease 到期后旧 worker 写入被拒绝，控制器按策略创建新 Run。Release、Projection 和 Operator 来源的 Effect 不复用 Producer fence，而校验各自控制聚合的 revision 与 Dispatcher lease/fence。
+
+[Baseline 兼容策略](01-context-and-trust.md#2-baseline-snapshot-不是全局事务快照)在 Run start、Resume、Candidate seal、Assessment、Product promotion、Effect dispatch、Release 和 `DELIVERED` 前执行。四类判定不能混用：Acceptance Contract 改变产生新 Goal Revision；Task Oracle 或输入改变产生新 Task；Gate Policy/受保护 Gate 实现改变触发新 Assessment；Release SLO、环境或 rollout policy 改变触发 Release 重验或新 Release。checkpoint 永不携带授权。
+
+取消同样是带 revision 的状态转换。Runner 收到取消后终止进程树并丢弃迟到结果；仅依赖协作式 Prompt 停止不构成取消机制。
+
+## 7. Effect Ledger
+
+Agent 只能提出 Effect intent，控制器验证后才创建；Release、Outcome Projection 和 Operator 也可以成为 Effect 来源：
+
+```text
+effect_id / goal_revision
+origin_type          RUN / RELEASE / PROJECTION / OPERATOR
+origin_ref
+control_ref / controlling_revision
+intent_hash / idempotency_key / target
+authorization_basis_ref
+PREPARED / REJECTED / DISPATCHED / CONFIRMED / FAILED / UNKNOWN
+COMPENSATING / COMPENSATED / COMPENSATION_FAILED
+dispatch_attempt_refs
+receipt / read_back / compensation_ref
+```
+
+- Run 来源在创建 intent 时校验 Run fence；其他来源校验控制聚合 revision 或 Operator command ID；
+- Effect 保存授权依据，不保存一个永不过期的执行 Grant；每次 dispatch 在 attempt 中记录新签发的短期 Grant、Dispatcher lease/fence 和结果；
+- 撤销原写权限会阻止新写，但已 DISPATCHED 的 Effect 可以获得独立、只读且仅限原 target 的 reconcile Grant；若策略不允许安全回读则保持 UNKNOWN 并进入 Operator 对账；
+- Resume、Retry 和 Projection Outbox 唤醒复用原 Effect 与幂等键；只有 Effect Dispatcher 调用外部 API、决定重试并迁移状态；
+- dispatch 前授权失败进入 `REJECTED`；外部明确失败进入 `FAILED`，只有回执证明副作用未发生且策略标记 retryable 时才能回到 PREPARED；
+- `UNKNOWN` 先查询外部状态，再确认、补偿或决定是否重发；
+- 补偿是拥有独立 intent、幂等键、授权和 attempts 的 child Effect；原 Effect 的 `COMPENSATING/COMPENSATED` 由 `compensation_ref` 指向的 child 状态派生；
 - Replay 默认禁止真实副作用；
-- 权限在每次 dispatch 前重新检查，旧 checkpoint 不延续已撤销授权；
-- 无法幂等、回读或补偿的高影响操作不自动执行。
+- 无法幂等、回读或补偿的高影响操作不自动执行；
+- Git、PR、飞书、配置和部署都遵守同一状态机，不把 API 调用散落到 Agent prompt。
 
-## 6. 停止、发布与自愈
+## 8. Assessment、Delivery 与自愈
 
-只有硬性验收通过、没有阻塞 Unknown 且发布观察稳定，才能 `DELIVERED`。
+Release 至少记录：
 
-候选无改进但仍未通过 Gate、预算耗尽或关键来源不可达时返回 `NO_SAFE_RELEASE`。目标歧义和授权缺失分别返回 `NEEDS_GOAL_INPUT` 与 `NEEDS_BOUNDARY_INPUT`。
+```text
+release_id / product_revision_id / environment_revision
+delivery_mode / release_policy_revision / rollout_strategy
+status / health_evidence / rollback_target
+previous_phase        UNKNOWN 时用于对账
+```
 
-运行中发现偏差时，系统固定故障环境，生成复现和修复 Task，再走相同验证循环。设置最大连续修复次数、冷却期和风险预算；回滚目标也要在当前环境重新检查兼容性，不能只因“过去安全”就盲目回滚。
+受保护检查和独立 Verifier 也必须由 VERIFY Task 产生受信 executor Run，因此同样受预算、lease、fencing 和审计约束。Gate Controller 不直接执行隐形工作；它只消费这些 Run 通过 Broker/Assurance 记录的 Evidence，并创建 Assessment。
 
+```text
+SEALED Candidate
+  → VERIFY Runs: build/schema/static checks
+  → VERIFY Runs: protected tests + independent verification
+  → VERIFY Runs: counterexample/fault search when policy requires
+  → Gate Controller → Assessment
+```
+
+以 Claim 为 subject 的 Assessment 只派生该 Claim 的 `verified/refuted` 状态，不晋升 Product。Candidate Assessment 必须绑定当前 Goal Revision、Baseline 和 Gate Policy，以 Evidence 逐条覆盖硬 Acceptance Contract，且没有 `BLOCKING` Unknown，PASS 后才可晋升 Product Revision；随后按 Delivery Mode 收束：
+
+- `ARTIFACT_ONLY`：由当前 PASS Assessment 晋升并封存的 Product Revision 已可获取；
+- `PULL_REQUEST`：创建 PR 的 Effect 已 CONFIRMED；
+- `STAGING/PRODUCTION`：Release 经过 DEPLOYING、OBSERVING 并满足 Release SLO，状态为 HEALTHY。
+
+运行偏差先形成 Evidence 和 finding claim；该 Claim 获得 Claim-subject `PASS` Assessment 后才成为正式 Finding，再经去重生成有界 DISCOVER/REPAIR Task。系统设置最大连续修复次数、策略升级次数、冷却期和风险预算；无改进、预算耗尽或关键来源不可达时返回 `NO_SAFE_DELIVERY`，不能降低 Gate 伪造完成。
+
+回滚也是 Release/Effect。执行前必须检查当前 schema、配置和环境兼容性，不能因为某版本过去安全就盲目回滚。
+
+## 9. 必须通过的故障演练
+
+| 场景 | 必须保持的结果 |
+|---|---|
+| Verify 后主干或 Goal 改变 | Assessment applicability 变为 STALE，Release 被阻止并创建执行 rebase 的 BUILD/REPAIR Task 与后续 VERIFY |
+| 外部写成功但响应丢失 | Effect 进入 UNKNOWN，先回读，不重复副作用 |
+| Resume 时授权已撤销 | 可读取允许的恢复材料，但所有越权写入被 Broker 拒绝 |
+| Producer 修改测试或 Gate | Assurance 使用隔离的受保护版本，篡改不能影响 Assessment |
+| Context 索引落后 | 回退权威状态和 Source，不静默省略 |
+| Runner 丢失 lease 后恢复 | 旧 fencing token 的 checkpoint、结果、Candidate seal 和 Run 来源 Effect intent 全部被拒绝 |
+| 老 Goal 的 Run 晚于新 Goal 完成 | 保留历史 Evidence，但不能覆盖新 Outcome |
+| 相同 Finding 连续出现 | 去重并升级验证/修复策略，达到上限后停止 |

@@ -1,156 +1,230 @@
-# 自主 AI 产品工厂：最小概念设计
+# 自主 AI 产品工厂：最小可实施设计
 
-> 状态：概念设计 v0.4（压缩版）  
+> 状态：v0.5  
 > 核心链路：`人 → AI → 产品`  
-> 原则：先证明最小闭环，再增加系统、对象或 Agent。
+> 原则：确定性控制面拥有状态、权限、判断和发布权；Agent 只执行非权威 Task 并提交类型化结果。
 
-## 1. 目标
+## 1. 目标与首版边界
 
 用户只提供两类输入：
 
 - Goal：最终想得到什么产品或变化；
-- Boundary：不可违反的约束、预算、目标环境和预授权范围。
+- Boundary：不可违反的约束、预算、目标环境、交付模式和预授权范围。
 
-AI 负责理解、探索、设计、实现、验证、发布和修复。用户正常情况下不阅读 PRD、架构稿、Agent 对话、Review 报告或 checkpoint，只接触最终产品。
+Goal Gateway 将它们编译为不可变 Goal Revision，并保存双向 Goal Coverage Manifest：每条 Contract 引用原始 span 或版本化默认策略；原始请求和 Boundary 的每个 span 也必须映射到 Contract、`BLOCKING` Unknown，或由版本化确定性 Classification Policy 允许的非规范性 omission，并记录 `reason / policy_revision`。命令、约束、交付对象和 Boundary 不允许 omission；不可信 Goal Compiler/Agent 无权自行降级。存在未映射内容或无法消除的歧义时禁止冻结 revision，并返回 `NEEDS_GOAL_INPUT`。AI 负责探索、实现、验证和交付；正常路径不要求用户阅读中间产物。
 
-成功时交付 `Product`；不能安全交付时返回一个简短 Outcome，而不是让用户替 AI 审查中间过程。
+交付模式必须显式声明：
+
+| Delivery Mode | `DELIVERED` 的含义 |
+|---|---|
+| `ARTIFACT_ONLY` | 已封存并验证不可变制品 |
+| `PULL_REQUEST` | PR 创建 Effect 已确认；只有 Goal 明确要求 PR 时它才是最终产品 |
+| `STAGING` | 指定测试环境的 Release 已健康 |
+| `PRODUCTION` | 指定生产环境的 Release 已健康 |
+
+首个实现靶场收窄为：`xiaoin-backend` 单仓库、Java/Spring Boot/Gradle 后端变更、隔离 branch/worktree、自动构建与受保护验证，主交付模式为自主 `STAGING`。允许内部 `ARTIFACT_ONLY` 评测；不支持生产发布、多仓协议变更、不可逆数据迁移、长期密钥或远端配置写入。PR 可以是审计投影，但不能成为默认的人工接力点。
 
 ## 2. 最小架构：四个组件
 
 ```mermaid
 flowchart LR
   U[用户或 Issue Manager] --> G[1. Goal Gateway]
-  G --> S[2. State Core]
-  S --> R[3. Agent Runtime]
-  R --> A[4. Assurance & Delivery]
-  A -->|通过| P[最终产品]
-  A -->|Finding| R
-  P -->|运行反馈| S
-  S -->|Outcome| G
-  G --> U
+  G --> S[2. State Core<br/>确定性编排器]
+  S --> R[3. Agent Runtime<br/>Sandbox + Tool Broker]
+  R --> C[Candidate + Evidence]
+  C --> A[4. Assurance & Delivery]
+  A -->|Finding / Unknown| S
+  A -->|PASS| P[Product Revision]
+  P --> D[Delivery Effect / Release]
+  D --> O[最终产品与 Outcome]
+  O -->|运行反馈| S
 ```
 
-| 组件 | 只负责什么 |
+| 组件 | 唯一职责 |
 |---|---|
-| Goal Gateway | 接入飞书、Linear、Jira 等请求，形成版本化 Goal，并投影最终 Outcome |
-| State Core | 保存当前基线、证据和运行引用；编译任务上下文；执行产物保留与回收 |
-| Agent Runtime | 生成 Task，启动 Agent，管理分支、checkpoint、恢复和副作用 |
-| Assurance & Delivery | 用可执行 Oracle 验证候选，选择、发布、观测和回滚 |
+| Goal Gateway | 用持久 Inbox 接入飞书、Linear、Jira 等请求，编译 Goal Revision，并通过 Outbox 投影最终 Outcome |
+| State Core | 保存权威 revision；由确定性控制器校验 Task Graph、执行状态迁移、预算、lease/fencing、Context 编译和保留策略 |
+| Agent Runtime | claim 由控制器为 READY Task 创建的 QUEUED Run，在隔离环境执行 Agent；Tool & Capability Broker 是所有工具、密钥和真实副作用的强制边界 |
+| Assurance & Delivery | 运行受保护验证，生成 Assessment，晋升 Product Revision，并管理 Release、观察和回滚 |
 
-权限、预算、审计和索引是四个组件共同遵守的策略，不在第一版拆成更多“大系统”。这四个组件也不等于四个微服务；概念验证可以先是一个服务、一个隔离执行器和一个状态库。
+四个组件不是四个微服务。MVP 可以是一个控制面进程、一个 Runner 池、一个关系型状态库，加对象存储和 Git/制品存储。Broker、Release Controller、Inbox/Outbox 和 Operator Plane 都是组件内边界或横切视图，不另建顶层系统。
 
-## 3. 主循环
+Operator Plane 只用于暂停系统、终止 Run、撤销授权、对账未知 Effect、隔离故障 Runner 和紧急回滚。正常执行不等待 Operator 审批，也不要求 Operator 阅读 Agent 中间产物。
+
+## 3. 动态主循环
 
 ```text
 外部请求
-  → 编译 Goal Revision
-  → 固定 Baseline
-  → 生成一个带 Oracle 的 Task
-  → 为 Task 编译最小 Context View
-  → Agent 在隔离 Run 中产生 Candidate
-  → 系统收集 Evidence 并执行 Gate
-      ├─ 失败：Finding 回到 Runtime，生成修复 Task
-      ├─ 不确定：补证；预算耗尽则停止
-      └─ 通过：发布 Product Revision
-  → 运行反馈形成新 Evidence 或新 Task
-  → 清理无用中间产物
+  → Goal Revision + Acceptance Contract + Delivery Mode
+  → Baseline Snapshot
+  → Agent 提议 Task Graph
+  → 确定性控制器检查 DAG、预算、权限、风险和 Verify-before-Release
+  → 控制器为 READY Task 创建 QUEUED Run；Runner claim 后获得最小 Context View 并执行
+  → Candidate + Evidence
+  → Assessment
+      ├─ FAIL：Finding 去重后生成有界 REPAIR / DISCOVER Task
+      ├─ INCONCLUSIVE：补证；阻塞 Unknown 或预算耗尽则停止
+      └─ PASS：晋升 Product Revision
+  → 按 Delivery Mode 确认 Artifact、PR Effect 或环境 Release
+  → 满足对应交付条件后输出 DELIVERED
+  → 运行反馈形成新 Evidence、Task 或 Goal Revision
 ```
 
-新需求或改变产品含义的反馈必须创建新的 Goal Revision；运行指标不能偷偷改写原目标。
+Task 用 `requires / produces / invalidates / derived_from_finding` 形成可演进图，不增加永久 Plan 对象。Planner 只能提议；控制器负责拒绝环、越权、过期输入、无验证发布和无限 Repair。
 
-## 4. 最小对象集
+新需求或改变产品含义的反馈必须创建新的 Goal Revision。旧 Run 可以结束并保留 Evidence，但不能覆盖新 revision 的 Outcome，也不能晋升或发布旧 Candidate。
 
-第一版只保留九种核心记录，它们不是九个服务：
+## 4. 领域记录
 
-| 对象 | 含义 |
+对象数量不是设计目标；只有具有独立生命周期的语义才进入核心记录：
+
+| 生命周期记录 | 含义 |
 |---|---|
-| Goal Revision | 不可变的目标、验收意图和 Boundary 引用 |
-| Baseline | 本次工作的 Goal、源码/配置快照、当前产品和策略版本 |
-| Task | 目标、输入、期望 Delta、Oracle、Coverage、预算和停止条件 |
-| Run | 一次执行尝试；包含 branch、执行游标和租约 |
-| Candidate | Agent 产生但尚未被正式采用的代码、配置或方案 |
-| Evidence | 带来源、版本、范围和时间的观察或检查结果 |
-| Checkpoint | 恢复 Run 所需的引用清单，不保存 Agent 的完整“思想” |
-| Effect | 外部写操作的意图、幂等键、状态和回执 |
-| Product Revision | 通过 Gate 的正式产品版本；Outcome 只引用它或说明失败 |
+| Goal | 管理当前 Goal Revision、替代、取消和最终 Outcome |
+| Task | 不可变执行契约及图依赖；声明类型、输入、Task Oracle、Coverage、权限、预算和停止条件 |
+| Run | Task 的一次执行尝试；包含 lease、fencing token、branch、执行游标和 lineage |
+| Candidate | Agent 产生、封存但尚未采用的代码、配置或制品 |
+| Assessment | 控制器依据版本化 Policy 对 Candidate 或 Claim 做出的正式判断；Candidate Assessment 还绑定 Goal、Baseline 和逐条 Acceptance Coverage |
+| Effect | 外部写操作的意图、幂等键、授权、状态、回读和回执 |
+| Product Revision | 由当前有效 PASS Assessment 晋升的不可变正式产品版本 |
+| Release | Product Revision 到特定环境的一次部署、观察或回滚生命周期 |
 
-Context View 是按 Task 临时计算的，不是长期对象。只有当现有九种记录无法表达一条具有独立生命周期的规则时，才考虑增加新类型。
+不可变支持记录包括 Goal Revision、Baseline Snapshot、Context Manifest、Evidence、Claim、Checkpoint、Artifact Ref、Capability Grant 和 Policy Revision。它们不是额外服务：
 
-## 5. 信任模型
+- Evidence 是带来源、范围和版本的观察，不能自己给出 PASS；
+- Claim 是待判断结论；Finding 是经 Claim-subject `PASS` Assessment 验证成立的缺陷 Claim，并可成为 Candidate Assessment `FAIL/INCONCLUSIVE` 的结构化原因；
+- `verified/refuted/stale` 由控制器根据 Assessment 和失效规则导出，Agent 不能直接写；
+- Context View 是可删除的运行 payload，Context Manifest 只保存编译版本、输入 digest、遗漏和权限引用；
+- Checkpoint 只保存恢复引用，不保存完整聊天或“思想”；
+- Capability Grant 的内容不可变，其当前有效性由 expiry、revocation epoch 和 Policy Revision 计算。
 
-系统不信任任何 Agent，包括 Goal Compiler、Producer、Reviewer 和 Judge：
+## 5. 四层判定语义
 
-1. 所有 AI 输出默认是 Candidate 或 Finding，不是事实和产品。
-2. Goal 的每个解释必须能反向定位原始请求；无法消歧才询问用户。
-3. “没有发现”必须携带检查范围；未覆盖区域保持 Unknown。
-4. LLM Review 只能提出 Finding，硬 Gate 至少需要一个独立可观察信号。
-5. 多 Agent 用于扩大探索和寻找反例，不用投票制造真相。
-6. Checkpoint 只证明状态已保存，不证明内容正确。
-7. 无法在预算内通过 Gate 时不发布，不能降低标准伪造完成。
+“Oracle”不再泛指所有正确性判断：
 
-系统仍无法数学证明自己完全理解了开放式人类意图。它能做的是保留原始目标、检测遗漏和歧义、使用独立行为信号，并在证据不足时拒绝交付。
+| 层次 | 所属记录 | 只回答什么 |
+|---|---|---|
+| Acceptance Contract | Goal Revision | 用户最终要求和不可违反条件是什么 |
+| Task Oracle | Task | 当前 DISCOVER/BUILD/VERIFY/REPAIR/RELEASE Task 是否完成 |
+| Gate Policy | Assessment | Candidate 是否能晋升为 Product Revision |
+| Release SLO | Release | 指定环境中的交付是否健康、是否需要回滚 |
 
-## 6. Agent 不是固定组织架构
+Task 成功不等于 Candidate 可采用，Assessment PASS 不等于环境健康。探索 Task 的 Oracle 是覆盖要求的信息面、产出可复现 Evidence 并分类剩余 Unknown，而不是强行要求功能测试。
 
-“产品经理、架构师、开发、Reviewer”是可调用能力，不是四个永远存在的岗位：
+## 6. 系统不变量
 
-- 简单修改可能只有探索、实现和验证；
-- 开放方案可以 fork 多个候选；
-- 高风险任务增加独立安全或运行验证；
-- Reviewer 的输出仍需可复现 Evidence，不能直接批准产品。
-
-Agent 之间不传聊天总结。后序 Agent 获得 Goal、Baseline、Task、必要 Evidence、当前 Delta、Unknown 和稳定引用。
-
-## 7. 对外状态
+系统不信任 Goal Compiler、Planner、Producer、Reviewer 或 Judge。Agent 只能提交类型化提议、Candidate、Claim、Evidence 采集请求或工具请求；Evidence 由 Broker/Assurance 根据可追溯观察记录，所有权威状态迁移由控制器完成。
 
 ```text
-DELIVERED             已交付 Product Revision
+INV-01  Agent 不能绕过控制器直接修改权威状态。
+INV-02  Agent 不能获得长期凭证；Secret 不进入 Context、日志或 Evidence payload。
+INV-03  每次状态迁移必须校验 expected revision；Run 写入还必须携带当前 fencing token。
+INV-04  每个真实外部写操作必须先创建 Effect，超时后先回读而不是直接重发。
+INV-05  每个 DELIVERED 必须引用当前 Goal/Baseline/Gate Policy 下逐条覆盖硬 Acceptance Contract 的 Candidate PASS Assessment；Claim PASS 不能替代。
+INV-06  STAGING/PRODUCTION 的 DELIVERED 还必须引用 HEALTHY Release。
+INV-07  Producer 必须看到 Acceptance Contract 和 Task Oracle；受保护 Gate 材料只能挂载给通过 attestation 的可信 VERIFY executor，Producer 不得读取或修改。
+INV-08  Context View 必须对应含 compiler version、输入 digest 和 omission manifest 的 Context Manifest。
+INV-09  Goal、Baseline、Policy 或授权失效后，旧 Candidate 不得静默晋升或发布。
+INV-10  verified Claim 必须引用 Evidence、scope、Baseline、以该 Claim 为 subject 的 PASS Assessment 和 invalidation rule。
+INV-11  旧 Goal Revision 的 Run 可以结束，但不能覆盖新 revision 的 Outcome。
+INV-12  相同 Finding 不得无限生成同策略 Repair；必须去重、升级策略或停止。
+```
+
+多 Agent 只用于扩大探索、结构性独立验证和寻找反例，不通过投票制造真相。“产品经理、架构师、开发、Reviewer”是按需能力，不是常驻组织；Agent 之间不传聊天总结。
+
+系统无法数学证明自己完全理解开放式意图。它能做的是保留原始目标、显式 Unknown、追踪 Coverage、使用独立行为信号，并在证据不足时拒绝交付。
+
+## 7. 对外 Outcome
+
+```text
+DELIVERED             已达到 Goal Revision 声明的 Delivery Mode
 NEEDS_GOAL_INPUT      最终产品含义存在无法自动消除的歧义
-NEEDS_BOUNDARY_INPUT  缺少环境、预算、身份或预授权
-NO_SAFE_RELEASE       在约束和预算内没有通过 Gate 的候选
+NEEDS_BOUNDARY_INPUT  缺少目标环境、预算、身份或预授权
+NO_SAFE_DELIVERY      在约束和预算内没有可安全交付的候选
 CANCELLED             授权来源取消了当前 Goal Revision
 SYSTEM_FAULT          工厂自身故障且自动恢复预算耗尽
 ```
 
-外部系统可以显示 `RECEIVED/RUNNING`，但不回写内部计划、Agent 对话或候选列表。
+最终 Outcome 最少包含：
 
-## 8. 代码需求示例
+```text
+status / delivery_mode
+product_revision_ref  DELIVERED 时必填
+delivery_effect_ref   PULL_REQUEST 时必填
+release_ref           STAGING/PRODUCTION 时必填
+assurance_ref          optional，供机器或 Operator 按需查询
+```
 
-用户提出：“给订单创建接口增加可配置幂等保护，并交付可运行版本。”
+外部系统可以显示 `RECEIVED/RUNNING`，但不接收内部 Task Graph、Agent 对话、候选列表、完整 Review 或 trace。只有最终目标歧义和 Boundary 缺失可以打断用户；其他内部失败由系统修复或收束成 Outcome。
 
-系统内部会检查请求语义，枚举代码入口与远端配置，生成实现候选，用并发和兼容 Oracle 验证，并在隔离环境发布。产品、架构、开发和 Review 能力可以按需出现，但它们只交换版本化状态和 Evidence。
+## 8. MVP 与阶段退出条件
 
-用户最终只看到新版本；如果远端配置不可访问且无法证明开关行为，系统返回 `NO_SAFE_RELEASE`，不会要求用户阅读一份架构争论来替它决定是否上线。
+| 阶段 | 范围 | 退出条件 |
+|---|---|---|
+| M0 评测基线 | 从 `xiaoin-backend` 选取历史任务、正确 Patch、测试和已知失败样本 | 同一输入可重放；每个判断可追溯 Evidence；能模拟 stale Baseline、Runner 中断、权限撤销和测试篡改 |
+| M1 Candidate Factory | Goal/Task/Run/Candidate/Assessment、隔离 Runner、受保护测试、Capability Broker、Artifact GC；只产出 `ARTIFACT_ONLY` | 崩溃可恢复；旧 fencing token 写入被拒绝；受保护 Gate 不可被 Candidate 篡改；失败样本不被误判为 DELIVERED |
+| M2 自主 Staging MVP | 单仓自动生成 Task Graph、验证、部署隔离 Staging、观察和回滚；飞书或一个 Issue 入口 | 正常路径无人参与；重复/乱序事件不产生重复 Goal；未知 Effect 可对账；Release 失败自动回滚或返回 `NO_SAFE_DELIVERY` |
+| M3 以后 | 白名单低风险生产发布，再逐步扩展多仓、迁移和配置写入 | 另行定义生产 SLO、紧急停止、兼容回滚和合规策略 |
 
-## 9. 文档导航
+M0 固定质量、成本和延迟基线。安全退出指标先采用不可妥协的零容忍：已知不安全样本误交付数、故障注入后的重复 Effect 数、stale Candidate 发布数和受保护 Gate 绕过数都必须为 `0`。同时持续记录任务成功率、恢复率、端到端延迟、成本和中间产物放大倍数；不能用削减验证换取指标好看。
+
+## 9. 代码需求示例
+
+用户提出：“给订单创建接口增加可配置幂等保护，并交付可运行版本。”Boundary 指定 `STAGING`，Goal Compiler 至少形成这些 Acceptance Contract：
+
+```text
+开关关闭时保持原行为
+相同幂等键不能创建多个订单
+并发重复请求返回契约规定的一致结果
+同键不同 payload、失败重试和记录 TTL 行为明确
+配置不可达时采用已声明的安全策略
+性能开销不超过既定预算
+```
+
+控制器校验并执行动态图：
+
+```text
+DISCOVER 入口、事务、消息、schema 和配置消费路径
+  → BUILD Candidate
+  → VERIFY 构建、并发、兼容、开关、故障和篡改保护
+  → Assessment
+  → Product Revision
+  → STAGING Release
+  → Release SLO 观察
+```
+
+如果远端配置不可访问且策略不允许容忍，它成为 `BLOCKING` Unknown，系统返回 `NO_SAFE_DELIVERY`，不会让用户阅读架构争论来替 AI 判断上线风险。
+
+## 10. 文档导航
 
 总纲足以理解整体设计。只有处理对应问题时才读取专题：
 
 | 问题 | 专题 |
 |---|---|
-| Agent 如何获得上下文，如何避免错误认知继承 | [01-context-and-trust.md](01-context-and-trust.md) |
-| Agent 如何运行、续用、fork、merge 和处理副作用 | [02-runtime.md](02-runtime.md) |
-| 大量中间产物如何限制、晋升和回收 | [03-artifacts.md](03-artifacts.md) |
-| 飞书表格、飞书任务、自有 Issue Manager 和 Orca 如何衔接 | [04-integrations.md](04-integrations.md) |
-| 研究来源 | [REFERENCES.md](REFERENCES.md) |
+| Baseline、Context Manifest、Coverage、Assessment 和独立验证 | [01-context-and-trust.md](01-context-and-trust.md) |
+| Task Graph、状态机、恢复、fencing、Capability 和 Release | [02-runtime.md](02-runtime.md) |
+| 中间产物如何限制、晋升、索引和回收 | [03-artifacts.md](03-artifacts.md) |
+| 飞书、自有 Issue Manager、Inbox/Outbox 和结果投影 | [04-integrations.md](04-integrations.md) |
+| 研究来源和参考实现心得 | [REFERENCES.md](REFERENCES.md) |
 
-## 10. 明确不做什么
+## 11. 明确不做什么
 
+- 不在首版持有生产权限、执行不可逆迁移或跨仓协议变更；
 - 不先建设通用自治组织、全量知识图谱或 Agent 市场；
-- 不把每个风险都升级成一个微服务或永久对象；
-- 不保存所有对话、摘要、候选和工具输出；
-- 不让 Issue Manager 兼任项目记忆和运行数据库；
-- 不用“多 Agent”本身代替测试、证据和产品反馈；
-- 不在概念阶段规定数据库表、消息队列和部署拓扑。
+- 不把每条规则升级成微服务、永久对象或常驻 Agent；
+- 不保存所有对话、摘要、候选、评论和工具输出；
+- 不让 Issue Manager 兼任项目记忆、运行数据库或权限来源；
+- 不用多 Agent、LLM 投票或人工阅读中间产物代替测试、Evidence 和产品反馈；
+- 不先固化数据库表和消息中间件，先用状态机、不变量和故障演练验证语义。
 
-## 11. 设计产物预算
+## 12. 设计产物预算
 
 本文档体系本身也遵守产物治理：
 
 - 活跃设计只允许 `1 个总纲 + 4 个专题 + 1 个冷参考`；
+- 默认 Context 只加载 README 和当前问题对应的一个专题；不得无条件拼接全部六份文件，`REFERENCES.md` 永不默认加载；
 - 一条规则只有一个主要归属，不在多份文件复制；
 - 调研过程、争论和被淘汰模型不进入活跃目录；
 - 新文件必须说明独立读者和独立生命周期，否则合并进现有专题；
 - 总纲能删除的细节就下沉，专题能删除的历史就不归档；
 - 文档增长超过预算时先压缩或替换，不默认新增。
-
