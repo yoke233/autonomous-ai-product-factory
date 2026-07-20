@@ -14,6 +14,7 @@
 goal_revision
 git_commit / dependency_lock_digest / image_digest
 schema_revision / product_revision
+doc_snapshot        ref, content_digest, version, resolved_at
 remote_config       value_digest, etag, observed_at, expires_at
 external_api        capability_digest, observed_at, expires_at
 policy_revision / protected_gate_revision
@@ -21,6 +22,8 @@ capability_grant_ref, expires_at
 ```
 
 Baseline 不声称这些来源来自同一个全局瞬间；它记录每个来源的版本、观察时间、有效期和兼容策略。无法枚举、拒绝访问、输出截断或过期的来源必须进入 Unknown，搜索结果不能冒充项目全集。
+
+`doc_snapshot` 是一次性固化的只读输入（内容 + version/hash，见 [04 §7](04-integrations.md#7-project-注册表intake-与文档-provider)）。固化时点唯一：经 Intake 的 Goal 继承澄清期间固化的快照——保证人确认的草稿与执行依据一致，Goal 编译不重新 resolve；无 Intake 的入口（如 Connector `revise`）在 Goal 编译时 resolve 固化；Rebase 产生的新 Baseline 继承同一 Goal Revision 的快照。它属不可变引用而非动态观察，不带 `expires_at`：执行期间不重新 resolve，外部文档变化不触发 stale，只有新 Goal Revision 才更新快照。编译新 Goal Revision 时 resolve 失败的引用按本节规则进入 Unknown，不静默省略；provider 不可达不影响已冻结快照的执行。
 
 控制器在以下位置重新检查兼容性：
 

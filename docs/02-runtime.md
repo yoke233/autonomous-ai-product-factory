@@ -208,7 +208,28 @@ SEALED Candidate
 
 回滚也是 Release/Effect。执行前必须检查当前 schema、配置和环境兼容性，不能因为某版本过去安全就盲目回滚。
 
-## 9. 必须通过的故障演练
+## 9. 部署拓扑：控制面上云，执行面跟随代码
+
+控制面（权威状态库、队列、通知投影）可托管云端；代码仓库与模型凭据所在的机器运行 **Worker 守护进程**，只用出站长连接/轮询认领工作，无入站端口要求。仓库检出、长期密钥和模型凭据不进入控制面；控制面持有权威记录及其必要 payload——需求文本、Goal 草稿、固化文档快照（含 `file://` 内容，为审计与跨 Worker 一致性所需）、diff、Evidence 和回执。
+
+Worker 认领两类工作，共用同一套 claim/lease/fencing 协议（§3）：
+
+| 工作域 | 内容 | 权限 |
+|---|---|---|
+| Gateway 域 | Intake 澄清会话的单轮 clarify job：读仓库与引用文档，产出回复或 Goal 草稿 | 只读工具，无 Bash/写文件，不产生 Effect |
+| Task 域 | Goal 下的 Run（DISCOVER/BUILD/VERIFY/…） | 按 Task 声明的 capability |
+
+clarify job 挂在 Intake 而非 Goal 下，不进入 §3 的 Task/Run 状态机（后者只编排 Goal 下的执行）：它是单轮无副作用作业，只读取仓库与文档快照、产出一条回复或 Goal 草稿，不产生 Candidate、Evidence 或 Effect。claim/lease/fencing 协议同样适用：控制器按 Intake 会话轮次签发 lease 与单调 token，Intake 写入口在被写目标侧校验当前 token（同 §3 实现注记），旧 Worker 迟到的回复被拒；失败、超时或 Worker 离线后本轮可被另一匹配 Worker 重认领，clarify job 无需 checkpoint，重认领即重跑当前轮。对话消息不进入 Goal Context——执行者只消费草稿文本与固化文档快照（[04 §7](04-integrations.md#7-project-注册表intake-与文档-provider)）。Gateway 域不产生 Context View，INV-08 的 manifest 义务只覆盖 Task 域 Run；工具白名单仍由 Worker 侧 Broker（§4 同一边界，此处仅授予只读工具）强制执行，Agent 同样不获得长期凭证（INV-02）。
+
+受保护材料随执行面驻留：受保护 Gate 的测试夹具、生成器、秘密反例和预期值存在持有仓库的 Worker 机器上，不进入控制面。单机模式（Producer Run 与受保护 VERIFY 同机）不豁免 INV-07——两者必须文件系统隔离：受保护材料挂载在 Producer Run 不可读、不可写的路径（独立 OS 用户或容器 + 独立工作目录），只有通过 attestation 的可信 VERIFY executor 才获得挂载。合并部署是同一隔离要求的本地实现，不是放宽隔离的理由。多 Worker 时，材料持有并入 attestation 声明：材料由 Operator 经受信通道预置（不经控制面分发），受信 VERIFY executor 注册时携带所持材料的 digest，控制器只把受保护 VERIFY 派给 digest 与 Baseline `protected_gate_revision` 匹配的 executor，无匹配则显式排队（同下文降级行为），不降级到 Producer 可读路径。
+
+路由复用既有 attestation/executor profile 机制：Project 注册表声明路由标签，Worker 注册时携带自身标签与持有仓库声明，控制器只把 job 派给标签匹配的 Worker。同一 Project 的仓库由哪台机器持有对用户透明。
+
+客户端（Web Console 或后续桌面壳）与 Worker 一样只出站接入；通知（待批准、需澄清、交付完成）经 Outcome/事件投影推送（WebSocket/SSE，飞书 IM 卡片是后置连接器）。
+
+降级行为：Worker 离线时 job 停留在队列并按 lease 语义可被其他匹配 Worker 认领（无匹配 Worker 则显式排队，不静默丢弃）；控制面不可达时 Worker 不得自行开工新 job，进行中的 Run 可完成本地执行但结果上报按幂等重试，lease 过期后旧 token 写入照常被拒。单机模式（控制面与 Worker 同进程或同机）是同一协议的合并部署，不是独立代码路径。
+
+## 10. 必须通过的故障演练
 
 | 场景 | 必须保持的结果 |
 |---|---|

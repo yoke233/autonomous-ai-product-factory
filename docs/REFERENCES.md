@@ -136,3 +136,38 @@ Multica 的 `completed` 只映射 `Run.SUCCEEDED`，不能映射 `Assessment.PAS
 M0/M1 可用受限、容器化的 Multica sidecar 验证 claim、取消、重试和 Resume。若无法阻止外部写旁路、拒绝迟到结果、精确封存 Candidate，或整套 Multica 的运维成本高于 Runner 价值，则只替换 Runner，不改变 Factory Core。面向第三方托管或商业产品嵌入前，必须根据当前 [Multica LICENSE](../../../../research/multica/LICENSE) 取得适用授权或改用自研轻量 Runner。
 
 最终原则：**Multica 能缩短“Agent 如何可靠运行”的建设时间，不能替代“结果为何可信、何时允许交付”的系统核心。**
+
+## 前身项目复盘（2026-07-20）：tuixiu 与 zhanggui
+
+本工厂是同一目标的第三次尝试。前两次为：[tuixiu](https://github.com/yoke233/tuixiu)（TS/Fastify/Prisma + acp-proxy，Issue-to-PR 编排台，2026-03-03 停更）和 [zhanggui](https://github.com/yoke233/zhanggui)（Go/Wails 多 Agent 编排平台，代号 ai-workflow，2026-04-03 停更）。两者一脉相承——tuixiu 的 `docs/spec_simple/` 就是 zhanggui 的 Go 设计文档。
+
+### 死因
+
+两个项目的执行主链都打通过（tuixiu：UI→Run→ACP 隧道→sandbox→事件流→PR+审批；zhanggui：WorkItem→Action DAG→Run→Deliverable，Claude/Codex 双 ACP 真实 trace），都不是死于跑不通，而是死于收敛失败：
+
+- **tuixiu：边迁移边加特性，旧轨永不删除。** Issue 上三套状态字段并存（`status`/`state`/`statusV2`）加双向映射兼容层；workspace 新旧两套概念并存；编排两套模型并存。v2 重构四个批次代码全部写完，但 4 个 feature flag 默认 false 从未打开，checklist 一项未勾。最后一个提交是修 agent 负载手动计数 underflow。
+- **zhanggui：概念膨胀 + 文档治理压过交付。** 十几个顶层对象、UI 名与 DB 表名（issues/steps/executions）长期不一致、`metadata["ceo"]` 等旁路字段累积业务语义；205 篇 docs、三代架构归档、canonical map + CI docs guard，最后阶段的提交全在管文档。single-kernel 重构自己写下“接受一次较硬的 cutover 而非无限期兼容”，但 cutover 未完成即停更。
+
+共同根因：**每次收敛都用“兼容层 + 开关灰度”代替硬 cutover，最终两套并存、哪套都不完整。** 本设计的第一红线由此而来：新语义落地时删除旧路径，不留永久 feature flag；docs 概念数量增长快于可运行状态迁移数量即为复发信号（对应 [README §12](README.md#12-设计产物预算) 与对象数量非目标原则）。
+
+### 反面教材对本设计不变量的印证
+
+| 前身踩坑 | 本设计对应取舍 |
+|---|---|
+| agent load 手动 increment/decrement 分散 6+ 处，产生 underflow | fencing/lease 校验必须发生在被写目标侧，用 DB 条件 UPDATE，不用应用层计数（[02-runtime §3 实现注记](02-runtime.md#3-权威状态机)） |
+| GitCredential token 明文入库；RoleTemplate initScript 等同 sandbox 内 RCE | INV-02：Agent 不获得长期凭证，Secret 不进入 Context/日志/Evidence |
+| “AI Review”实为启发式打分（标题长度 +10 分），命名承诺大于实现 | Evidence/Claim/Assessment 分层，LLM 评审永不直接构成 PASS |
+| 业务语义流入 `metadata` 旁路字段成为事实 | INV-01/INV-03：权威状态只有控制器可写，全部走类型化状态迁移 |
+| Agent 自报 done 即完成 | 四层判定语义：Task SUCCEEDED ≠ Assessment PASS ≠ Release HEALTHY |
+
+### 可复用资产
+
+- **tuixiu `acp-proxy/src/acp/agentBridge.ts`**（最高价值，同为 TS）：基于官方 ACP SDK 的 ndJSON/JSON-RPC over stdio 桥接、pending RPC 管理、per-run 队列，有测试；Runner adapter 从 headless CLI 升级 ACP 时直接移植。zhanggui `docs/reports/acp-real-traces.md` + `cmd/acp-probe/` 有 Claude/Codex 双 agent 真实 trace 与探针框架可对照。
+- **tuixiu Event/Approval/ExecutionProfile 模型**：高危动作审批队列 + 事件流 + 策略即数据（workspacePolicy/skillsPolicy/toolPolicy）落库可审计——Effect Ledger 与 Capability 策略的 schema 雏形。
+- **tuixiu workspace policy 解析器**（`backend/src/utils/workspacePolicy.ts`）：五级优先级（task>role>project>profile>platform）+ 能力兼容强校验 + 解析结果连同来源落库；与 Policy Revision 思路同构。empty 模式“禁止注入任何仓库凭据”的语义值得保留。
+- **tuixiu sandbox provider 抽象**：container_oci / boxlite / host_process / bwrap 四实现一接口（`acp-proxy/src/sandbox/`），对应 Worker 执行隔离层。
+- **zhanggui ActionSignal 信号模型**（`internal/core/action_signal.go`）：“Agent 主动声明 complete/blocked/need_help，引擎不猜”，terminal 信号每 run 只接受一次——可吸收进 Run 结果协议。
+- **zhanggui builtin executor 边界**：ACP 放开自由度，平台只拦截 `git_commit_push / open_pr / self_upgrade`——Tool Broker 读写分流的已验证最小切法。
+- **zhanggui harness 方法论**：`docs/learning/harness-engineering-notes.zh-CN.md` 与 `harness-tasks.json`（任务 + validation 命令 + checkpoint + RECOVERY 记录）是 Task 契约与恢复语义的实战原型。
+
+两仓皆可随时重新克隆查阅；本节只保留结论与指针，不复制实现细节。
