@@ -12,7 +12,6 @@
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "declaration": true,
     "sourceMap": true
   },
   "include": ["src"]

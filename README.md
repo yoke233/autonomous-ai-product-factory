@@ -7,7 +7,15 @@
 
 ## 状态
 
-设计冻结于 v0.6，进入 M0（评测基线）实施准备。首个靶场仓库在 M0 启动时选定。
+设计冻结于 v0.6。第一个垂直切片已可用：Web Console 提交 Goal → 隔离 worktree 内 claude 执行 → Candidate 封存 → Repo Profile 验证 → Assessment → 一次批准交付（`ARTIFACT_ONLY`）。
+
+## 结构
+
+```text
+apps/server   控制面：PGlite(进程内 Postgres) + Fastify + Worker（Goal/Run 状态机、Runner、验证）
+apps/web      Web Console：React + Vite（Goal 列表/新建/详情/批准）
+docs/         设计文档（总纲 + 4 专题 + 冷参考）
+```
 
 ## 开发
 
@@ -15,7 +23,9 @@ TypeScript / Node ≥22 / pnpm。
 
 ```bash
 pnpm install
-pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest
-pnpm dev         # tsx watch src/index.ts
+pnpm dev         # 同时起 server(:3400) 与 web console(:3401)
+pnpm typecheck
+pnpm test
 ```
+
+环境变量：`FACTORY_RUNNER=stub` 用桩 Producer（不调模型）；`FACTORY_PORT`、`FACTORY_DATA_DIR` 可覆盖默认。执行真实 Goal 需要本机可用的 `claude` CLI。
