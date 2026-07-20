@@ -151,11 +151,15 @@ Coverage gaps + Unknown/Finding + Required reverification
 
 Verifier 首轮 Context Manifest 必须过滤 Producer Claim、Finding 和解释，只保留原始 Goal、Baseline、只读 Candidate、公开验收条件和独立 Source；形成自己的 finding claim 后，第二轮才开放差异材料。盲审只能减少锚定，真正的独立性还要求：
 
-- Acceptance Contract、Task Oracle 和 Coverage requirement 对 Producer 公开；受保护 Gate 的测试夹具、生成器、秘密反例和预期值位于 Producer 不可读、不可写的隔离存储；
+- Acceptance Contract、Task Oracle 和 Coverage requirement 对 Producer 公开；受保护 Gate 的测试夹具、生成器、秘密反例和预期值位于 Producer 不可读、不可写的隔离存储（实证：评分函数对模型可见时作弊率高 43 倍；隐藏 holdout 测试可把作弊压到近零）；
+- 只读不等于安全：作弊手段包括对测试输入硬编码返回值、运算符重载欺骗断言、从 git 历史挖出既有修复照抄。因此 VERIFY 环境必须同时移除答案泄漏面（如原仓库完整 git 历史），并用行为差分而非仅断言相等来判定；
+- 受保护 Gate 材料自身先过质量 Assessment 才能生效（INV-13）：mutation 分数达阈值、已知正确 Patch 必须通过、已知错误 Patch 必须被拒——错误的 Gate 会同时拒真放假（SWE-bench 原始题目深审 >60% 不可解的教训）；校验测试优先锚定 spec 派生的性质与不变量，而非 Producer 同源的样例断言；
 - 验证环境与开发环境隔离，Candidate 不能修改 Gate 配置；
 - Verifier 使用独立检索路径，并默认只有 Candidate 只读权限；
 - 硬 Gate 至少包含一个确定性检查、属性/差分测试、故障注入、外部回读或运行指标；
 - 高风险策略可以升级到不同模型或提供方，但模型差异不能代替独立行为信号。
+
+验证信号的可信层级固定为：**隔离的确定性检查 > 独立行为信号（差分/故障注入/外部回读/运行指标） > 执行过程结构信号（如盲目重试、缺失验证步骤的轨迹降权） > LLM 评审**。LLM 评审只能产生 Claim 和 Evidence，永不直接构成 PASS；多数投票在相同输入下不提升期望正确率，且会在约 1/4 的分歧中压制正确答案。
 
 ## 7. 失效
 

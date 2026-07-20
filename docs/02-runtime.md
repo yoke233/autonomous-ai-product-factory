@@ -79,6 +79,8 @@ Release:
 
 控制器用 Task revision 原子地将 READY 占位为 RUNNING 并创建唯一 QUEUED Run；`(task_id, active)` 最多一个，显式并行只能创建 Fork child Task。Runner 先取得本地容量，再原子 claim 与自身 attestation、executor profile 和 trust domain 匹配的 Run，并获得 lease 与单调 fencing token；只有可信 VERIFY executor 才挂载受保护材料。数据库记录是事实源，WebSocket、消息通知和轮询只负责唤醒。Task 可以顺序拥有多个 Run，一个 Product Revision 可以有多个环境 Release。
 
+**实现注记（M1/M2）**：单仓单团队规模不需要分布式引擎。单进程控制面 + Postgres 即可承载全部语义——`SELECT … FOR UPDATE SKIP LOCKED` 作 Run 队列，单调 revision 列 + 条件 UPDATE 实现 CAS、lease 与 fencing（先例：Absurd 5 张表对 Temporal 37 张表）。fencing 校验必须发生在**被写目标侧**（State Core 每个写入口和 Effect Dispatcher），仅在签发侧生成 token 不构成保护。若后续 Runner 规模化，可用 durable execution 引擎（Temporal/DBOS，OpenAI Codex 生产运行于 Temporal）替换 Run 编排、恢复与认领层；但引擎 Activity 只有 at-least-once 语义，Effect Ledger、领域状态机和语义 GC 不可外购。
+
 ## 4. Sandboxed Runner 与 Capability Broker
 
 每个 Run 使用隔离 workspace、最小 Context View 和 Task 级短期 Capability Grant。Broker 必须把纯读取/隔离本地操作与真实外部写入分流：
@@ -172,6 +174,8 @@ receipt / read_back / compensation_ref
 - Replay 默认禁止真实副作用；
 - 无法幂等、回读或补偿的高影响操作不自动执行；
 - Git、PR、飞书、配置和部署都遵守同一状态机，不把 API 调用散落到 Agent prompt。
+
+该状态机不是新发明：它是“客户端生成幂等键 + 外部调用前先落本地 intent（Stripe/Brandur 模式）+ transactional outbox/inbox 去重 + 超时先回读”的成熟组合，Postgres 单表加事务即可实现，实现时应对照这些先例而不是自创协议。
 
 ## 8. Assessment、Delivery 与自愈
 
