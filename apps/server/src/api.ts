@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Store } from "./store.js";
 import type { Worker } from "./worker.js";
+import { stubClarifier, type Clarifier } from "./intake.js";
 
 const NewGoalBody = z.object({
   repoPath: z.string().min(1),
@@ -14,8 +16,79 @@ const NewGoalBody = z.object({
     .default({}),
 });
 
-export function buildApi(store: Store, worker: Worker): FastifyInstance {
+const NewIntakeBody = z.object({ repoPath: z.string().min(1) });
+const IntakeMessageBody = z.object({ text: z.string().min(1) });
+const IntakeStartBody = z.object({
+  goalText: z.string().min(1),
+  buildCommand: z.string().optional(),
+  testCommand: z.string().optional(),
+});
+
+export function buildApi(store: Store, worker: Worker, clarifier: Clarifier = stubClarifier): FastifyInstance {
   const app = Fastify();
+  /** 正在等待澄清 Agent 回复的 intake，拒绝并发消息。 */
+  const clarifying = new Set<string>();
+
+  app.post("/api/intakes", async (req, reply) => {
+    const parsed = NewIntakeBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    if (!existsSync(parsed.data.repoPath)) return reply.code(400).send({ error: "仓库路径不存在" });
+    return reply.code(201).send(await store.createIntake(parsed.data.repoPath));
+  });
+
+  app.get("/api/intakes/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const intake = await store.getIntake(id);
+    if (!intake) return reply.code(404).send({ error: "not found" });
+    return intake;
+  });
+
+  app.post("/api/intakes/:id/messages", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = IntakeMessageBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const intake = await store.getIntake(id);
+    if (!intake) return reply.code(404).send({ error: "not found" });
+    if (intake.status !== "OPEN") return reply.code(409).send({ error: "该会话已开工" });
+    if (clarifying.has(id)) return reply.code(409).send({ error: "Agent 正在思考，请等待回复" });
+
+    clarifying.add(id);
+    try {
+      const messages = [...intake.messages, { role: "user" as const, text: parsed.data.text, at: new Date().toISOString() }];
+      const result = await clarifier(intake.repo_path, messages);
+      messages.push({ role: "agent", text: result.reply, at: new Date().toISOString() });
+      // 消息与草稿在澄清成功后才落库：失败时用户重发即可，不会留下悬空的单边消息。
+      await store.updateIntakeConversation(id, messages, result.draft);
+      return await store.getIntake(id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(502).send({ error: `澄清 Agent 调用失败：${message.slice(0, 1000)}` });
+    } finally {
+      clarifying.delete(id);
+    }
+  });
+
+  app.post("/api/intakes/:id/start", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = IntakeStartBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const intake = await store.getIntake(id);
+    if (!intake) return reply.code(404).send({ error: "not found" });
+    if (intake.status !== "OPEN") return reply.code(409).send({ error: "该会话已开工" });
+    const goal = await store.createGoal({
+      repoPath: intake.repo_path,
+      goalText: parsed.data.goalText,
+      boundary: {
+        deliveryMode: "ARTIFACT_ONLY",
+        repoProfile: {
+          ...(parsed.data.buildCommand ? { buildCommand: parsed.data.buildCommand } : {}),
+          ...(parsed.data.testCommand ? { testCommand: parsed.data.testCommand } : {}),
+        },
+      },
+    });
+    await store.markIntakeStarted(id, goal.id);
+    return reply.code(201).send(goal);
+  });
 
   app.post("/api/goals", async (req, reply) => {
     const parsed = NewGoalBody.safeParse(req.body);

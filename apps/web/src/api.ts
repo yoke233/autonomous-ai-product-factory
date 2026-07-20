@@ -18,8 +18,41 @@ export interface GoalDetail {
   events: { id: number; kind: string; message: string; created_at: string }[];
 }
 
+export interface IntakeMessage {
+  role: "user" | "agent";
+  text: string;
+  at: string;
+}
+
+export interface IntakeDraft {
+  goalText: string;
+  buildCommand?: string;
+  testCommand?: string;
+}
+
+export interface Intake {
+  id: string;
+  repo_path: string;
+  messages: IntakeMessage[];
+  draft: IntakeDraft | null;
+  status: "OPEN" | "STARTED";
+  goal_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 async function j<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text();
+    let msg = `${res.status}: ${body}`;
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown };
+      if (typeof parsed.error === "string") msg = parsed.error;
+    } catch {
+      // 保留原始报文
+    }
+    throw new Error(msg);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -35,4 +68,22 @@ export const api = {
   approve: (id: string) => fetch(`/api/goals/${id}/approve`, { method: "POST" }).then((r) => j<Goal>(r)),
   reject: (id: string) => fetch(`/api/goals/${id}/reject`, { method: "POST" }).then((r) => j<Goal>(r)),
   cancel: (id: string) => fetch(`/api/goals/${id}/cancel`, { method: "POST" }).then((r) => j<Goal>(r)),
+  createIntake: (repoPath: string) =>
+    fetch("/api/intakes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoPath }),
+    }).then((r) => j<Intake>(r)),
+  sendIntakeMessage: (id: string, text: string) =>
+    fetch(`/api/intakes/${id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    }).then((r) => j<Intake>(r)),
+  startIntake: (id: string, body: { goalText: string; buildCommand?: string; testCommand?: string }) =>
+    fetch(`/api/intakes/${id}/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => j<Goal>(r)),
 };

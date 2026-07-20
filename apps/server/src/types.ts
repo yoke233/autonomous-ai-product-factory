@@ -82,3 +82,29 @@ export interface FactoryEvent {
   message: string;
   created_at: string;
 }
+
+/** Intake：开工前的需求澄清会话，聊明确后转正式 Goal。 */
+export type IntakeStatus = "OPEN" | "STARTED";
+
+export interface IntakeMessage {
+  role: "user" | "agent";
+  text: string;
+  at: string;
+}
+
+export interface IntakeDraft {
+  goalText: string;
+  buildCommand?: string;
+  testCommand?: string;
+}
+
+export interface Intake {
+  id: string;
+  repo_path: string;
+  messages: IntakeMessage[];
+  draft: IntakeDraft | null;
+  status: IntakeStatus;
+  goal_id: string | null;
+  created_at: string;
+  updated_at: string;
+}

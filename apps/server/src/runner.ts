@@ -23,7 +23,7 @@ export type Producer = (ctx: RunnerContext) => Promise<ProducerResult>;
 const PRODUCER_TIMEOUT_MS = 20 * 60 * 1000;
 const VERIFY_TIMEOUT_MS = 10 * 60 * 1000;
 
-function exec(
+export function exec(
   cmd: string,
   args: string[],
   opts: { cwd: string; timeoutMs: number; shell?: boolean; signal?: AbortSignal; stdin?: string },

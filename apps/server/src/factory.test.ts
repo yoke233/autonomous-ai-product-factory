@@ -79,6 +79,58 @@ describe("factory main loop (stub producer)", () => {
     expect(assessment?.verdict).toBe("FAIL");
   });
 
+  it("intake: clarify twice → draft → start creates a RECEIVED goal, then locked", async () => {
+    const app = buildApi(store, worker);
+
+    const bad = await app.inject({ method: "POST", url: "/api/intakes", payload: { repoPath: path.join(repo, "nope") } });
+    expect(bad.statusCode).toBe(400);
+
+    const created = await app.inject({ method: "POST", url: "/api/intakes", payload: { repoPath: repo } });
+    expect(created.statusCode).toBe(201);
+    const intakeId = created.json().id as string;
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/intakes/${intakeId}/messages`,
+      payload: { text: "帮我加个功能" },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().draft).toBeNull();
+    expect(first.json().messages).toHaveLength(2);
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/intakes/${intakeId}/messages`,
+      payload: { text: "验收标准：hello.txt 里出现 world" },
+    });
+    expect(second.statusCode).toBe(200);
+    const draft = second.json().draft;
+    expect(draft.goalText).toContain("验收标准");
+
+    const started = await app.inject({
+      method: "POST",
+      url: `/api/intakes/${intakeId}/start`,
+      payload: { goalText: draft.goalText, testCommand: "git status" },
+    });
+    expect(started.statusCode).toBe(201);
+    expect(started.json().status).toBe("RECEIVED");
+    expect(started.json().repo_path).toBe(repo);
+
+    const again = await app.inject({
+      method: "POST",
+      url: `/api/intakes/${intakeId}/start`,
+      payload: { goalText: "x" },
+    });
+    expect(again.statusCode).toBe(409);
+    const lockedMsg = await app.inject({
+      method: "POST",
+      url: `/api/intakes/${intakeId}/messages`,
+      payload: { text: "再聊聊" },
+    });
+    expect(lockedMsg.statusCode).toBe(409);
+    await app.close();
+  });
+
   it("stale revision transition is rejected (CAS)", async () => {
     const goal = await store.createGoal({
       repoPath: repo,

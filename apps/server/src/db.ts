@@ -45,6 +45,17 @@ CREATE TABLE IF NOT EXISTS assessments (
   created_at   timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS intakes (
+  id         text PRIMARY KEY,
+  repo_path  text NOT NULL,
+  messages   jsonb NOT NULL DEFAULT '[]',
+  draft      jsonb,
+  status     text NOT NULL DEFAULT 'OPEN',
+  goal_id    text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS events (
   id         serial PRIMARY KEY,
   goal_id    text NOT NULL REFERENCES goals(id),

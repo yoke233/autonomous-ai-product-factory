@@ -7,6 +7,9 @@ import type {
   FactoryEvent,
   Goal,
   GoalStatus,
+  Intake,
+  IntakeDraft,
+  IntakeMessage,
   Run,
   RunStatus,
   Verdict,
@@ -138,6 +141,31 @@ export class Store {
       [goalId],
     );
     return r.rows[0] ?? null;
+  }
+
+  async createIntake(repoPath: string): Promise<Intake> {
+    const id = `i_${randomUUID().slice(0, 8)}`;
+    await this.db.query(`INSERT INTO intakes (id, repo_path) VALUES ($1,$2)`, [id, repoPath]);
+    return (await this.getIntake(id))!;
+  }
+
+  async getIntake(id: string): Promise<Intake | null> {
+    const r = await this.db.query<Intake>(`SELECT * FROM intakes WHERE id = $1`, [id]);
+    return r.rows[0] ?? null;
+  }
+
+  async updateIntakeConversation(id: string, messages: IntakeMessage[], draft: IntakeDraft | null): Promise<void> {
+    await this.db.query(
+      `UPDATE intakes SET messages = $1, draft = $2, updated_at = now() WHERE id = $3`,
+      [JSON.stringify(messages), draft ? JSON.stringify(draft) : null, id],
+    );
+  }
+
+  async markIntakeStarted(id: string, goalId: string): Promise<void> {
+    await this.db.query(
+      `UPDATE intakes SET status = 'STARTED', goal_id = $1, updated_at = now() WHERE id = $2`,
+      [goalId, id],
+    );
   }
 
   async addEvent(goalId: string, kind: string, message: string): Promise<void> {
