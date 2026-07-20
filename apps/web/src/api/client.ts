@@ -1,3 +1,5 @@
+import { mockApi } from "./mock";
+
 export interface Goal {
   id: string;
   revision: number;
@@ -16,6 +18,13 @@ export interface GoalDetail {
   candidate: { branch: string; diff_stat: string; patch: string; head_commit: string } | null;
   assessment: { verdict: string; evidence: { checks: { name: string; command: string; exitCode: number; outputTail: string }[]; notes?: string } } | null;
   events: { id: number; kind: string; message: string; created_at: string }[];
+}
+
+export interface GoalComment {
+  id: number;
+  author: "human" | "executor" | "system";
+  text: string;
+  created_at: string;
 }
 
 export interface IntakeMessage {
@@ -56,7 +65,7 @@ async function j<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const api = {
+const realApi = {
   listGoals: () => fetch("/api/goals").then((r) => j<Goal[]>(r)),
   getGoal: (id: string) => fetch(`/api/goals/${id}`).then((r) => j<GoalDetail>(r)),
   createGoal: (body: { repoPath: string; goalText: string; repoProfile: { buildCommand?: string; testCommand?: string } }) =>
@@ -65,9 +74,18 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }).then((r) => j<Goal>(r)),
+  // 工单评论：人向执行器留言，执行器/系统回执。后端契约见 mock.ts。
+  listComments: (id: string) => fetch(`/api/goals/${id}/comments`).then((r) => j<GoalComment[]>(r)),
+  postComment: (id: string, text: string) =>
+    fetch(`/api/goals/${id}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    }).then((r) => j<GoalComment>(r)),
   approve: (id: string) => fetch(`/api/goals/${id}/approve`, { method: "POST" }).then((r) => j<Goal>(r)),
   reject: (id: string) => fetch(`/api/goals/${id}/reject`, { method: "POST" }).then((r) => j<Goal>(r)),
   cancel: (id: string) => fetch(`/api/goals/${id}/cancel`, { method: "POST" }).then((r) => j<Goal>(r)),
+  getIntake: (id: string) => fetch(`/api/intakes/${id}`).then((r) => j<Intake>(r)),
   createIntake: (repoPath: string) =>
     fetch("/api/intakes", {
       method: "POST",
@@ -87,3 +105,7 @@ export const api = {
       body: JSON.stringify(body),
     }).then((r) => j<Goal>(r)),
 };
+
+// VITE_MOCK=1（`pnpm dev:mock`）时用内存态 mock，脱离后端预览 UI。
+export const api: typeof realApi =
+  import.meta.env.VITE_MOCK === "1" ? mockApi : realApi;

@@ -1,0 +1,130 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Factory Console — 暖白 Linear 风格操作台，映射到 shadcn 语义 token。
+   语义色仅用于状态：绿=通过/交付 琥珀=待批准 蓝=生产中 红=失败。 */
+
+:root {
+  --radius: 0.5rem;
+
+  --background: #fbfaf8;
+  --foreground: #26282c;
+  --card: #ffffff;
+  --card-foreground: #26282c;
+  --popover: #ffffff;
+  --popover-foreground: #26282c;
+  --primary: #26282c;
+  --primary-foreground: #ffffff;
+  --secondary: #f0efeb;
+  --secondary-foreground: #26282c;
+  --muted: #f6f5f2;
+  --muted-foreground: #8a8f98;
+  --accent: #ebeff4;
+  --accent-foreground: #26282c;
+  --destructive: #d2494c;
+  --destructive-foreground: #ffffff;
+  --border: #ecebe7;
+  --input: #e1e0db;
+  --ring: #4e68dc;
+
+  /* 状态语义色（成对：实色 / 浅底） */
+  --info: #4e68dc;
+  --info-soft: #eceffb;
+  --success: #2e9e5b;
+  --success-soft: #e9f5ee;
+  --warning: #c98a2c;
+  --warning-soft: #f6eedc;
+  --danger: #d2494c;
+  --danger-soft: #f8eaea;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #17181b;
+    --foreground: #e6e7ea;
+    --card: #1d1e22;
+    --card-foreground: #e6e7ea;
+    --popover: #1d1e22;
+    --popover-foreground: #e6e7ea;
+    --primary: #e6e7ea;
+    --primary-foreground: #17181b;
+    --secondary: #26282c;
+    --secondary-foreground: #e6e7ea;
+    --muted: #212226;
+    --muted-foreground: #9498a1;
+    --accent: #2a2d33;
+    --accent-foreground: #e6e7ea;
+    --destructive: #e05a5d;
+    --destructive-foreground: #17181b;
+    --border: #2a2b2f;
+    --input: #34363b;
+    --ring: #6b82e6;
+
+    --info: #7f93ec;
+    --info-soft: #23273a;
+    --success: #57bd83;
+    --success-soft: #1a2b21;
+    --warning: #d9a862;
+    --warning-soft: #2e2718;
+    --danger: #e26a6d;
+    --danger-soft: #2f1e1f;
+  }
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --font-mono: ui-monospace, "SF Mono", "SFMono-Regular", "JetBrains Mono", Menlo,
+    Consolas, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+      "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}
