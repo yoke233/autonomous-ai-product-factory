@@ -7,4 +7,15 @@
 
 ## 状态
 
-设计冻结于 v0.6，进入 M0（评测基线）实施准备。代码尚未初始化。
+设计冻结于 v0.6，进入 M0（评测基线）实施准备。首个靶场仓库在 M0 启动时选定。
+
+## 开发
+
+TypeScript / Node ≥22 / pnpm。
+
+```bash
+pnpm install
+pnpm typecheck   # tsc --noEmit
+pnpm test        # vitest
+pnpm dev         # tsx watch src/index.ts
+```
