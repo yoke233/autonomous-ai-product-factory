@@ -1,79 +1,110 @@
-# Effect 与外部系统边界
+# Provider 边界与 GitHub Adapter
 
 术语和不变量以 [CONTEXT.md](../CONTEXT.md) 为准。
 
-## 1. 委托入口
+## 1. Provider 是能力边界
 
-第一阶段只提供 Web Console。用户选择仓库和运行配置，在草拟阶段澄清要求，确认后发布精确 Mandate revision。执行适配器只接收已发布 Mandate，不依赖草拟对话历史。
+Factory 的用例只依赖 Provider 提供的 Repository、Issue 和 PR 能力，不直接调用 GitHub API。Provider 返回统一的核心字段，并保留稳定的外部标识用于后续读写。
 
-仓库、构建命令和测试命令只是委托可引用的上下文登记，不进入领域内核。仓库文本和外部材料都是不可信输入，只能参与草拟 Mandate 或形成 Result，不能扩大权限。
+这层抽象只有两个目的：
 
-出现第一个确定的外部入口后，再为它增加窄适配器；不预建通用收件箱、事件总线、字段映射或双向同步协议。
+1. 让 Agent 闭环不散落 GitHub API、Webhook 和权限细节；
+2. 允许未来在真实需求出现时增加另一套承载后端。
 
-## 2. Effect 表达获准发生的外部动作
+第一阶段只实现 GitHub Adapter。不建设插件市场、通用连接器配置、跨平台同步或动态字段映射。
 
-授权 Effect 时，人的 Judgment 必须一次性固定：
+## 2. 最小能力
 
-- 稳定 Effect 身份；
-- 目标系统与规范化动作；
-- 关键载荷或内容摘要；
-- 权限边界；
-- 幂等域。
-
-授权 Judgment 发布时，这份身份和完整规范已经固定的动作意图即成为 Effect。二者必须作为同一次权威发布持久化，或让 Effect 能从授权 Judgment 确定性重建；不能先发布模糊授权，再补建可替换身份或载荷的 Effect。
-
-每个 Judgment 只表达一个结论。接受业务 Result 与授权 Effect 使用两份 Judgment；授权 Judgment 可以引用先前的接受 Judgment 作为前提，但不会把两个结论合并成一次裁决。
-
-一个 Effect 只表达一个外部动作。执行、重试和对账使用 Attempt；平台回执和现实回读形成 Results；是否实际发生、是否健康、是否构成交付，再由人的 Judgment 确认。
+Provider 只覆盖当前闭环需要的操作：
 
 ```text
-人发布 Judgment，固定并授权 Effect
-  → Attempt 调用外部系统
-  → 回执 / 观察 Result
-  → 人确认、拒绝或保留未知
+Repository
+  读取仓库、默认分支和精确 Commit
+  为 Run 获取代码和推送 Agent 分支
+
+Issue
+  读取 / 创建 / 编辑
+  评论 / 关闭 / 重新打开
+  读取 / 修改 Parent 与 Sub-issues
+  读取 / 修改 blocked by 与 blocking
+
+Pull Request
+  读取指定 PR；恢复时列出 Issue 关联的 PR
+  创建 / 更新 / 评论
+  读取 Commits / Checks / Reviews / mergeability
+  发布 Agent Check / 请求 Review
 ```
 
-授权不等于已经执行，调用成功不等于现实状态正确，网络超时也不等于失败。
+Merge 保留为人的操作。接口可以读取 Merge 状态，但第一阶段不向 Agent 暴露执行 Merge 的能力。
 
-## 3. 幂等、未知与补偿
+Provider 返回的 Issue 和 PR 状态保持最小：
 
-- 同一 Effect 的所有重试沿用同一稳定身份和幂等域。
-- 回执丢失或调用超时时，先以原 Effect 身份查询或回读，不能创建新 Effect 盲目重发。
-- 无法确认时保留未知，不能用本地超时覆盖外部现实。
-- 补偿不是修改或倒放原 Effect，而是引用原 Effect、经过新授权的另一个 Effect。
-- 多个外部动作各有独立 Effect，不预建发布聚合或部署状态机。
+- Issue：`open`、`closed`，关闭时必须返回 `completed` 或 `not_planned`；未知关闭原因按未满足依赖处理并对账；
+- PR：`open`、`merged`、`closed`；
+- Review：`comment`、`approve`、`request_changes`。
 
-撤销授权只能阻止尚未派发的 Attempt。执行适配器在派发前检查最新适用的授权与撤销 Judgment；如果 Attempt 已经派发、正在执行或结果未知，撤销不能抹掉外部现实，只能尝试取消、继续回读，并在需要时另行授权补偿 Effect。
+平台特有字段只有在出现明确用例时才加入，不预先追求所有代码托管平台的最低公分母。
 
-第一阶段没有外部写需求，因此不建设通用 Effect Ledger、Saga 框架或外部作用适配器。第一个真实需求只实现对应动作及其必要对账路径。
+## 3. GitHub Adapter
 
-## 4. CI/CD 由专业系统负责
+GitHub Adapter 负责：
 
-Factory 不建设 CI/CD、制品流水线、部署控制器、环境权限平台或回滚系统。Git、CI/CD 和部署平台保持各自的专业职责。
+- 把 GitHub Repository、Issue、Pull Request、Commit、Check 和 Review 映射到统一模型；
+- 把 GitHub Parent、Sub-issues 和 Issue Dependencies 映射到 Issue DAG；
+- 把 GitHub Webhook 映射成 Factory 能理解的触发事件；
+- 使用 GitHub delivery ID 去重；
+- 使用 GitHub App installation token 执行最小权限操作；
+- 在每次写入前读取 Issue、PR 和 head SHA 的最新状态；
+- 把 GitHub API 的速率限制、权限拒绝和暂时故障转换成明确错误。
+- 把 Run、PR 和 Issue 的通知投递到对应 GitHub 时间线。
 
-第一阶段不执行：
+第一阶段由 GitHub 承载 Issue、PR、评论、Review、关闭原因与 Merge 状态。Factory 数据库保存 Provider 关联标识、Issue 与当前目标 PR 的明确关联、必要缓存、已观察事件和 Run；缓存不能覆盖 GitHub 的新状态。
 
-- push Git 或创建 PR；
-- 更新 Issue；
-- 触发 CI/CD 或部署；
-- 修改远端配置；
-- 合并、观察或回滚。
+## 4. GitHub App 最小权限
 
-未来若 Mandate 明确要求现实交付，Factory 仍只做两类窄集成：
+- Metadata：读取仓库基本信息；
+- Issues：管理 Issue 和评论；
+- Contents：读取代码并向 Agent 分支推送 Commit；
+- Pull requests：创建或更新 PR、请求 Review；
+- Checks：发布 Factory 自己的 Agent Run Check。
 
-1. 把人已经授权的 Effect 交给专业系统执行；
-2. 把专业系统的回执、健康状态或其他观察保存为 Result，交回人判断。
+不申请 Administration、Deployments、Environments、Actions 管理或仓库规则修改权限。安装令牌使用短期令牌，并且只注入当前 Run。
 
-专业系统的成功状态不能直接改写 Mandate，也不能自行发布 Factory 的 Judgment。
+人的 Review 和 Merge 不委托给 Agent。若未来允许自动合并，必须作为独立产品能力明确设计和授权。
 
-## 5. 示例：部署回执丢失
+## 5. 事件与幂等
 
-1. 人发布 Judgment `J1`，接受代码 Result。
-2. 人以同一代码 Result 为 subject 发布独立 Judgment `J2`，引用 `J1`，同时固定并授权 Effect `E1`：把精确提交部署到 staging。
-3. 适配器以 `E1` 的幂等身份发起调用，随后网络超时。
-4. 系统保留 `E1` 结果未知，不创建 `E2` 重发同一部署。
-5. 适配器查询部署平台，得到“staging 正运行该提交”的观察 Result。
-6. 健康检查形成另一个 Result。
-7. 人在原 Mandate revision 下发布新的 Judgment，确认或拒绝交付。
+第一阶段只处理能推进闭环的事件：
 
-如果要求、基线、权限或健康标准已经修订，历史部署仍是历史事实，但不能自动满足新的 Mandate revision。
+- 用户在 Issue 上显式启动 Agent；
+- PR Review 提交了 `Request changes`；
+- PR head 更新、关闭或合并；
+- 用户取消或重新运行 Agent Run。
+- Issue 父子关系或 Dependencies 变化；
+- Issue 关闭或重新打开。
+
+具体触发方式可以是 GitHub App 按钮、命令评论或 Factory 界面，但最终都必须落到明确用户和唯一 Run。
+
+- 首次创建 PR 后保存 Issue、方案与 PR 的稳定关联；后续 Run 按关联读取，不按标题或更新时间猜测；
+- 恢复时如果找到多个候选 PR 且没有已保存关联，要求用户选定目标；
+- 返工优先更新同一个 PR，不按 Run 创建新 PR；
+- 推送前比较启动时和当前 head SHA，发生竞争时停止并重新读取；
+- Agent 拆分前先持久化拆分计划；每个预期 Sub-issue 和 Dependency 使用跨 Run 不变的逻辑 operation ID，并逐项记录 `confirmed` 或 `unknown`；
+- 其他外部写入使用由 Run ID 和动作生成的稳定 operation ID；分支名、PR/评论标记或 Check Run `external_id` 在平台允许时携带该 ID；
+- 写入超时后使用 operation ID 和已知外部标识对账；无法可靠确认时保留结果未知，不盲目重复创建；
+- PR 已关闭或合并后不再写入，除非用户显式开始新的方案。
+
+通知评论与其他写入共用稳定 operation ID 和去重规则。GitHub 通知只是一个投递渠道；Factory 先把已观察的 GitHub 事实与 Notification 一起保存，再推进事件消费位置，因此 GitHub 暂时不可用不会丢失完成通知。GitHub 写入结果未知时先对账；无法确认时保留未知，不能承诺外部评论绝不重复。
+
+Webhook 用于及时推进状态，定期对账用于修复漏投或长时间未处理的事件。对账覆盖所有 Factory 正在跟踪但尚未确认最新终态事件的 Issue、近期关闭或重新打开的 Issue、关联 PR 和未送达通知，不建设全仓库同步器。
+
+## 6. CI/CD 与部署不属于 Factory
+
+GitHub Actions 或其他 CI/CD 系统继续负责构建流水线、制品、部署、发布和回滚。Factory：
+
+- 可以在 Agent worktree 中运行仓库已有的本地验证命令；
+- 可以通过 Provider 读取已有 Check，帮助 Agent 修复问题；
+- 不创建流水线、不托管制品、不部署环境、不对账发布状态；
+- 不建立 Delivery 或 Effect 状态机。
+
+如果未来需要 Agent 修改部署配置，它仍然通过 Commit 和 PR 提议变更，后续执行交给专业系统。

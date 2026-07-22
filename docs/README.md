@@ -4,94 +4,101 @@
 
 ## 1. 一句话
 
-> 系统接受一份委托，围绕它安排工作、收集产出、作出判定；获授权的外部作用产生新的产出，直到系统能够确认结果。
+> Factory 接收 Issue，运行编码 Agent，并持续更新关联的 Pull Request，直到人完成审核。
 
-## 2. 五个核心概念
+Issue 和 PR 是系统自己的核心抽象，GitHub 是第一套 Provider。Factory 不是单纯的 GitHub 外挂，但第一阶段也不复制 GitHub 做第二套数据源。
 
-| 概念 | 回答的问题 |
+## 2. 最小领域
+
+只有三个拥有独立产品生命周期的核心对象：
+
+| 对象 | 回答的问题 |
 |---|---|
-| Mandate | 系统正在为哪一版要求工作？ |
-| Work | 为推进委托，还必须完成什么？ |
-| Result | 工作或外部世界实际带回了什么？ |
-| Judgment | 这些产出在当前委托下意味着什么？ |
-| Effect | 系统获准对外部世界做什么？ |
+| Issue | 现在要解决什么？ |
+| Pull Request | 当前提出了什么代码方案？ |
+| Agent Run | Agent 这一轮做了什么？ |
+
+Commit、Check、Review 和 Merge 是围绕 PR 发生的协作记录与操作，不再提升成另一套 Result、Judgment 或 Effect。
+
+任务 DAG 由 Issue 构成：父 Issue 用 Sub-issues 拆分工作，Dependency 表达先后阻塞。边统一从前置 Issue 指向被阻塞 Issue，Sub-issue 到 Parent 是隐式完成边。Run 只是 Agent 接手一个已就绪 Issue 后的一轮执行，Run 内部不再建立第二套 Workflow 或 Job 图。
+
+## 3. 系统边界
 
 ```text
-Mandate
-  → Work
-  → Attempt → Result
-  → Judgment
-  → 必要时授权 Effect
-  → Attempt → Result
-  → Judgment 确认现实结果
+                     ┌─ Issue 能力 ─┐
+产品界面 / 用例层 ───┼─ PR 能力 ────┼─ Provider ── GitHub（第一阶段）
+                     └─ 仓库能力 ───┘
+          │
+Issue DAG ── 调度器 ── Run 服务 ── ACP Client ── Agent / Worker
 ```
 
-必须分开的三种结论：
+- Factory 定义 Issue、PR 和 Run 的统一含义与用例；
+- Provider 负责实际读写 Repository、Issue、PR、Check 和 Review；
+- GitHub Adapter 是第一套 Provider 实现；
+- Run 的 ACP session、原始 JSON-RPC 事件、耗时、成本和停止原因由 Factory 保存；
+- Issue 父子关系、依赖、调度进度和完成通知由 Factory 通过 Provider 管理；
+- 第一阶段 Issue 和 PR 的正文、评论与状态仍由 GitHub 承载，本地缓存没有独立裁决权。
 
-- Work 完成：当前义务已经结束；
-- Result 被接受：有权判定者认为它满足精确 Mandate；
-- 已交付：有权判定者确认约定的现实结果已经成立。
+抽象的目的，是让核心执行闭环不直接写死 GitHub API，而不是提前建设多平台同步框架。
 
-不能用一个 `SUCCESS` 或 `DELIVERED` 混合三者。
-
-## 3. 谁作出 Judgment
-
-权威来自人，不来自 Agent、测试器、编排器或数据库。
-
-第一阶段采用最小规则：
-
-- 人在 Console 中发布或修订 Mandate；
-- Work 的固定完成条件满足时，系统可以依据 Mandate 的预先授权结束该 Work，但不能因此接受 Result；
-- 必要检查失败时，系统依据 Mandate 预先授权的确定性规则自动拒绝；
-- 检查通过只形成 Result，不自动接受最终结果；
-- Result 的接受、Effect 的授权和交付确认均由人在 Console 中显式作出；
-- LLM 可以分析、推荐或寻找反例，但其输出始终只是 Result。
-
-控制面负责验证权限、固定引用和保存 Judgment，不把自己的运行状态当成权威。
-
-## 4. 第一阶段产品闭环
-
-1. 用户草拟并发布一份 Mandate revision。
-2. 系统安排一个粗粒度 Work。
-3. Worker 在隔离工作区执行 Attempt。
-4. Agent 产生代码 Result，构建和测试产生观察 Results。
-5. 系统执行 Mandate 预先授权的确定性完成规则和否定性门禁。
-6. 用户查看产出和材料，作出接受、拒绝或补证 Judgment。
-7. 系统交付被接受 Result 的稳定材料引用。
-
-第一阶段不执行远端 Git 写入、PR、CI/CD、部署或发布。专业系统继续负责这些工作；未来只有明确的现实交付需求才引入具体 Effect Adapter。
-
-## 5. 外部接口保持最小
-
-对使用者，产品只暴露一个主要对象：Mandate。
+## 4. 最小闭环
 
 ```text
-提交委托
-修订委托
-查看委托及其结果
-作出明确判定
+Issue
+  → 启动 Agent Run
+  → 创建或更新同一个 PR
+  → Checks + 人的 Review
+      ├─ Request changes → 新 Run → 新 Commit → 重新检查和审核
+      ├─ Approve         → 人执行 Merge
+      └─ Comment         → 继续讨论，必要时再启动 Run
+  → 关闭或保持 Issue
 ```
 
-Work、Attempt、队列、lease、fencing、Worker、材料存储和外部对账都隐藏在接口之后。
+Issue 没有版本。PR 也不是每次返工都重建；新的 Run 在同一个 PR 上增加 Commit。Check 必须对应具体 Commit，Review 是否因新提交失效由 Provider 的仓库规则决定。
 
-## 6. 设计边界
+Issue DAG 的闭环是：
 
-当前不预建：
+```text
+父 Issue
+  → 拆分 Sub-issues，并设置 blocked by / blocking
+  → 调度没有未完成前置依赖的 Issue
+  → Agent Run → PR → Review → Merge → Issue completed
+  → 解除下游 Issue 的阻塞并通知
+  → 所有 Sub-issues 均以 completed 结束后，父 Issue 可以完成
+```
 
-- 动态任务图、Planner、多 Agent 组织或 Agent 市场；
-- 通用连接器、Webhook 总线或双向同步框架；
-- 通用策略语言、证据图或材料平台；
-- 内建 PR、CI/CD、部署控制器或回滚系统；
-- 为尚不存在的多租户、跨区域和大规模 Worker 集群设计接口。
+## 5. 第一阶段产品
 
-出现真实调用者、独立生命周期和可执行验收之前，不增加新的核心概念或通用机制。
+1. GitHub Adapter 读取 Issue、Sub-issues 和 Dependencies；
+2. Factory 计算已就绪 Issue；用户显式启动，或按用户预先允许的策略自动启动 Run；
+3. GitHub Adapter 把 Issue、Repository 和关联 PR 提供给 Run；Run 服务先通过 ACP `session/new` 获得 Agent 创建的 session ID，再发送 `session/prompt`；
+4. Factory 按顺序保存 Agent 发回的 `session/update`、权限请求和 prompt response，并投影成聊天记录；
+5. Agent 可以在授权范围内继续拆分 Sub-issues、补充 Dependencies，或直接修改代码；
+6. Agent 在隔离 worktree 中修改代码并执行本地验证；
+7. Factory 通过 Provider 创建 PR，或向已有 PR 推送 Commit；
+8. Factory 通过 Provider 发布运行摘要和 Check，并保存“PR 等待 Review”或本轮结论通知；
+9. 用户在 GitHub Review；
+10. `Request changes` 后继续启动 Run，`Approve` 后由用户 Merge；
+11. Provider 确认 Issue 以 `completed` 关闭后，Factory 通知完成并重新计算下游 Issue。
+
+产品界面可以管理 Issue 和 PR，但它调用统一用例，不直接调用 GitHub API。第一阶段显示的数据来自 GitHub，Run 数据来自 Factory。
+
+## 6. 明确不做
+
+- 不建立 Mandate、Work、Result、Judgment、Effect 等平行领域对象；
+- 不创建 Issue revision、任务版本或需求版本状态机；
+- 不在第一阶段建设跨 Provider 双向同步或冲突合并；
+- 不在 Run 内建立 Workflow/Job DAG；任务分解统一使用 Issue、Sub-issue 和 Dependency；
+- 不建设通用 Planner 平台、多 Agent 组织或 Agent 市场；
+- 不建设 CI/CD、部署、发布、制品或回滚系统；
+- 不因为未来可能接入 GitLab 就提前实现最低公分母式通用平台。
 
 ## 7. 文档导航
 
 | 问题 | 文档 |
 |---|---|
-| Mandate、Result、Judgment 和判定者 | [01-context-and-trust.md](01-context-and-trust.md) |
-| Work、Attempt、重试和运行安全 | [02-runtime.md](02-runtime.md) |
-| Result、Artifact Ref 和材料保留 | [03-artifacts.md](03-artifacts.md) |
-| Effect 与外部专业系统 | [04-integrations.md](04-integrations.md) |
-| 研究来源 | [REFERENCES.md](REFERENCES.md) |
+| Issue、PR、Commit、Check 与 Review 的语义 | [01-context-and-trust.md](01-context-and-trust.md) |
+| Issue DAG、Agent Run、通知与恢复 | [02-runtime.md](02-runtime.md) |
+| Commit、日志和运行输出保存在哪里 | [03-artifacts.md](03-artifacts.md) |
+| Provider 边界与 GitHub Adapter | [04-integrations.md](04-integrations.md) |
+| 参考资料 | [REFERENCES.md](REFERENCES.md) |

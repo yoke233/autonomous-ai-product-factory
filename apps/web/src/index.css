@@ -1,8 +1,6 @@
 @import "tailwindcss";
-@import "tw-animate-css";
 
-/* Factory Console — 暖白 Linear 风格操作台，映射到 shadcn 语义 token。
-   语义色仅用于状态：绿=通过/交付 琥珀=待批准 蓝=生产中 红=失败。 */
+/* Issue、PR、Run 和通知各自表达独立事实。 */
 
 :root {
   --radius: 0.5rem;
@@ -126,5 +124,8 @@
     font-size: 13px;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--info) 20%, transparent);
   }
 }

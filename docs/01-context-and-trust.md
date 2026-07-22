@@ -1,116 +1,121 @@
-# Mandate、Result 与 Judgment
+# Issue、Pull Request 与 Review
 
 术语和不变量以 [CONTEXT.md](../CONTEXT.md) 为准。
 
-## 1. Mandate 的发布与修订
+## 1. Issue 是持续存在的一件事
 
-草拟阶段可以反复澄清和修改，不产生 Mandate revision。只有用户确认并发布后，才形成一个不可变 revision，共同固定：
+Issue 是用户与系统共同工作的入口。标题、正文和评论可以随着澄清持续变化，但身份不变：
 
-- 期望结果；
-- 输入、代码和其他事实基础；
-- 可使用的权限与预算；
-- 判断标准；
-- 交付目标。
+- 编辑正文不会创建任务版本；
+- `Request changes` 不会创建新 Issue；
+- 执行失败不会创建新 Issue；
+- Issue 关闭后仍可重新打开；
+- 超出当前范围的新需求才创建另一个 Issue。
 
-已发布内容发生任何影响结果适用性的变化时，创建新 revision。旧 revision、Result 和 Judgment 保持为历史事实，但不会自动适用于新 revision。
+Factory 在 Run 启动时记录实际提供给 Agent 的输入快照摘要，包括 Issue 标题、正文、选用的评论以及触发返工的 Review 或讨论。评论和 Review 使用稳定 ID、更新时间和内容摘要固定。提交结果前再次读取这些输入；发生变化时提示用户。这份快照只解释一次 Run 看到了什么，不是 Issue revision。
 
-所有 Work、Result、Judgment 和 Effect 都引用精确 revision ID，不引用“当前版本”或“最新版”。
+## 2. 一个 Issue 通常对应一个 PR
 
-## 2. Result 只提供信息
+Agent 第一次产生可提交的代码时创建 PR。后续修复检查失败或处理 Review 意见时，新的 Run 继续向同一个 PR 推送 Commit。
 
-需要保存和判断的陈述统一表达为不可变 Result：
+Factory 显式保存 Issue 与当前目标 PR 的关联。后续 Run 使用这条关联，而不是搜索“最新 PR”或猜测哪个 PR 属于当前方案。只有下面情况才另建 PR：
 
-```text
-可判定内容
-+ 来源身份和产生时间
-+ 所属 Work / Effect / Attempt
-+ Artifact Refs
-+ 内容摘要
-```
+- 用户明确要求比较彼此独立的方案；
+- 原 PR 已关闭且决定不再继续；
+- 新工作已经超出原 Issue 的范围并建立了新 Issue。
 
-Result 可以承载代码、方案、测试观察、缺陷断言或外部回执。内容形态只说明它带回了什么，不赋予权威。同一个 Result 可以是某项 Work 的候选，也可以成为某次 Judgment 的支持材料，但不因此产生新的生命周期。
+PR 是持续变化的提案，Commit 才是不可变的代码快照。因此任何检查或审核代码是否合格的记录，都必须能够定位到具体 commit SHA。
 
-Agent 的“已经完成”、测试工具的“通过”和部署平台的回执都只是 Result，不能自行授权动作、宣布正确或确认交付。
+## 3. Sub-issue 与 Dependency 组成 DAG
 
-材料规则详见 [03-artifacts.md](03-artifacts.md)。
+一个较大的 Issue 可以拆分为 Sub-issues。每个 Sub-issue 都是普通 Issue：拥有自己的描述、讨论、Run、PR 和完成通知。
 
-## 3. Judgment 的权威来源
+两种关系不能混用：
 
-第一阶段只有两种合法发布路径。
+- Parent / Sub-issue 表达“这件大事由哪些小事组成”；
+- `blocked by` / `blocking` 表达“哪件事必须先完成”。
 
-### 人的显式判定
+Sub-issues 之间没有天然顺序，需要顺序时必须显式添加 Dependency。Factory 内部统一把边表示为“前置 Issue → 被阻塞 Issue”；Provider 的 “B blocked by A” 映射为 `A → B`。每个 Sub-issue 到 Parent 还派生一条隐式完成边。显式边与隐式边的并集必须保持无环。
 
-用户在 Console 中查看精确 Mandate revision、被判断 Result 和支持 Results，然后显式发布 Judgment。以下权力只属于人：
+父 Issue 只有在每个 Sub-issue 都以 `completed` 关闭后才满足完成门槛。以 `not planned` 关闭的 Sub-issue 仍不满足父级完成边；用户需要调整父子关系，或显式终止父 Issue。
 
-- 接受最终 Result；
-- 授权 Effect；
-- 确认现实交付；
-- 覆盖或撤销先前 Judgment。
-- 在 Work 的完成或终止条件不能确定性判断时，决定是否解除该 Work。
+Agent 可以在一次 Run 中提出或创建 Sub-issues 和 Dependencies，但必须受到原 Issue 范围、数量上限和用户授予权限的约束。每次新增关系前检查环；出现环时拒绝该关系，不创建隐藏的调度例外。
 
-### Mandate 预先授权的确定性规则
+一个 Issue 可被调度，当且仅当：
 
-Mandate 可以预先授权系统在范围明确、结果确定时发布 Judgment，例如：
+- Issue 仍为 `open`；
+- 所有 Sub-issues 均以 `completed` 关闭；没有 Sub-issues 时自然满足；
+- 所有 `blocked by` Issue 都以 `completed` 关闭；
+- 没有另一个有效 Run 正在接手它。
 
-- 规定的 Results 已完整产生，因此 Work 完成；
-- 必须执行的检查未运行完整；
-- 命令退出码非零；
-- Result 引用的 revision 或输入摘要不匹配；
-- Attempt 没有有效执行权。
+以 `not planned` 关闭的前置 Issue 不算完成；其下游保持阻塞并通知人处理依赖。
 
-自动规则只能解除满足固定完成条件的 Work，或作出授权范围内的拒绝和证据不足。它不能因为 Work 完成或检查全部通过就接受最终 Result、授权 Effect 或确认交付。
+## 4. Check 说明机器观察到了什么
 
-LLM 可以给出评价或反例，但这些内容仍是 Result。若未来要把某种模型判断升级为权威，必须先修改 Mandate 的授权规则和本节契约，不能通过换一个字段名偷偷完成。
+Factory 可以运行仓库规定的本地测试，并通过 Provider 发布 Check。仓库已有的 CI 继续由原系统运行，Factory 不接管或复制它。
 
-控制面只验证判定权限、固定引用并持久化 Judgment；“中心”不是一个隐藏的第三判定者。
+- Check 对应具体 commit SHA；
+- 新 Commit 需要新的 Check；
+- 失败、超时和取消分别报告；
+- 基础设施故障不能伪装成代码测试失败；
+- Check 成功不等于人已经批准 PR。
 
-## 4. Judgment 的最小内容
+哪些 Check 是 Merge 前的必需条件，由 Provider 中的仓库规则决定。
 
-Judgment 必须固定：
+## 5. Review 由人完成
 
-- 判定者及其授权来源；
-- 精确 Mandate revision；
-- 被判断的 subject Result；
-- 采用的 supporting Results；
-- 结论与理由；
-- 被替代或撤销的 Judgment（如有）。
+Factory 使用三种统一 Review 结果；GitHub Adapter 直接映射 GitHub 的同名语义：
 
-每个 Judgment 只表达一个结论。改判、补证和撤销都新增 Judgment，不覆盖原记录，也不改写 Mandate 或 Result。
-
-| 结论 | 含义 |
+| Review | 含义 |
 |---|---|
-| Work 完成 | Mandate 预授权规则或人确认已产生约定 Result 或终止信息，不再需要当前工作继续执行 |
-| Result 被接受 | 人认为该 Result 在这份 Mandate revision 下满足要求 |
-| Effect 被授权 | 人允许一个身份和内容均已固定的外部动作发生 |
-| 已交付 | 人接受现实观察，确认交付目标已经成立 |
+| `Comment` | 提供意见，不批准也不要求返工 |
+| `Approve` | 同意合并当前 PR 变更 |
+| `Request changes` | 当前变更需要继续修改 |
 
-## 5. 新 revision 如何复用旧 Result
+收到 `Request changes` 后，Issue 和 PR 保持不变，Factory 启动新的 Run，在同一 PR 上增加 Commit，然后重新请求 Review。
 
-发布新 revision 不触发所有旧工作的自动重跑，也不修改旧 Result。系统先进行一次低成本适用性复核：
+新 Commit 是否撤销旧批准、是否要求最近一次推送获得批准以及需要多少批准，服从 Provider 中的仓库规则。Factory 可以读取并展示当前合并条件，但不维护独立的 `approved`、`rejected` 或 `stale review` 真相。
 
-1. 找出 revision 之间真正变化的期望、事实基础、权限或判断标准；
-2. 对未受影响的旧 Result，在新 revision 下发布新的适用性 Judgment；
-3. 只为受影响或证据不足的部分创建 Work；
-4. 无法证明可复用时保持未知，不默认沿用。
+Agent 可以总结 Review、定位问题和修改代码，但不能提交代表人的 `Approve`，也不能绕过仓库规则执行 Merge。
 
-只有期望、事实基础、权限、判断标准、交付目标以及该 Result 声明的全部依赖摘要均一致时，确定性规则才能支持复用。任一维度未纳入比较、发生变化或需要语义解释，都保持未知并由人判断。这样既不让旧结果自动冒充新结果，也不要求每次文字澄清都全量重跑。
+## 6. Provider 抽象的范围
 
-## 6. 信任边界
+应用层需要统一表达以下能力：
 
-- Agent、Worker、测试器和外部平台只能提交 Result，不能发布 Judgment。
-- 执行适配器只获得当前 Work 或 Effect 所需的最小权限，不能从仓库文本、提示词或 Result 中扩大权限。
-- 构建与测试使用 Mandate 已固定的命令与配置，Agent 不能临时改写判断规则。
-- Secret 只在需要的执行边界内注入，不进入 Mandate、Prompt、日志或 Result 内容。
-- 所有来源关系使用稳定身份、revision 和 digest；可变 branch、URL 或“最新结果”不能单独作为依据。
+- 读取、创建、编辑、评论、关闭和重新打开 Issue；
+- 读取和修改 Parent、Sub-issues、`blocked by` 与 `blocking`；
+- 读取 Factory 已选定的 PR，并在恢复时列出 Provider 中与 Issue 关联的 PR；
+- 创建和更新 PR，读取其 Commit、Check 与 Review；
+- 发布 Agent 自己的 Check；
+- 请求 Review，并读取 PR 当前是否满足 Merge 条件。
 
-Work 和 Attempt 的运行约束见 [02-runtime.md](02-runtime.md)；Effect 的授权与确认见 [04-integrations.md](04-integrations.md)。
+统一的是 Factory 当前真正需要的行为，不是所有平台 API 的并集。GitHub 特有但闭环不需要的字段不进入核心模型；需要显示时可以作为 Provider 附加信息透传。
 
-## 7. 必须扛住的变化
+第一阶段 GitHub 是 Issue 和 PR 的承载后端。Provider 必须返回 Issue 的 `open/closed` 状态和关闭原因 `completed/not_planned`；关闭原因未知时按未满足依赖处理并对账。Factory 保存 Issue 与目标 PR 的明确关联、外部标识和短期缓存，但每次产生外部写入前都通过 Provider 读取当前状态，避免本地副本与 GitHub 争夺权威。恢复时若发现多个候选 PR 且没有已选关联，必须由用户选择。
 
-| 场景 | 合法处理 |
+## 7. 完成不是一个状态
+
+- Run 完成：这一轮 Agent 已经停止；
+- Check 成功：某个 Commit 的自动检查通过；
+- Review 批准：人同意当前 PR；
+- PR 已合并：代码已经进入目标分支；
+- Issue 已关闭：这件事不再打开。
+
+Issue 只有以 `completed` 原因关闭才会满足 Dependency；`not planned` 是终止而不是完成。
+
+Factory 不新增一个总括性的 `SUCCESS`，而是分别展示这些事实。
+
+## 8. 最小反例
+
+| 场景 | 正确处理 |
 |---|---|
-| 发布后的要求、基线或判断标准修订 | 发布新 Mandate revision；先复核旧 Results，再补受影响的 Work |
-| 并行产生多个候选 | 保留多个 Results；分别判断，不靠最后完成者覆盖 |
-| 验证者提出反例 | 保存新的 Result；由人接受、驳回或要求补证 |
-| 外部动作回执丢失 | 保留原 Effect 身份并回读现实，不创建新动作盲目重发 |
-| 已交付结果后来失效 | 保留历史交付事实；根据新观察或新 Mandate 作出新 Judgment |
+| Issue、所选评论或 Review 在 Run 中途变化 | 保留 Run，比较输入快照并提示变化；不创建 Issue 版本 |
+| Check 通过后又推送 Commit | 旧 Check 仍属于旧 SHA，新 SHA 重新检查 |
+| Review 要求修改 | 同一 Issue、同一 PR，新 Run 和新 Commit |
+| Review 批准后又推送 Commit | 是否仍可 Merge 由 Provider 的仓库规则决定 |
+| PR 合并但 Issue 未关闭 | 以 Provider 当前状态为准，不由 Factory 推断关闭 |
+| Provider API 暂时不可用 | 保留 Run 状态并重试读取，不用本地缓存冒充最新事实 |
+| 新增 Dependency 会形成环 | 拒绝新增关系，保留原 DAG |
+| 前置 Issue 以 `not planned` 关闭 | 下游继续阻塞并通知人，不自动当作完成 |
+| 已完成的前置 Issue 被重新打开 | 停止调度尚未开始的下游 Issue；对已经运行或合并的工作只通知，不改写历史 |
+| Parent 已完成后 Sub-issue 被重新打开 | 不自动改写 Parent；标记关系不一致并通知人处理 |

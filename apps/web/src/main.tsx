@@ -1,48 +1,32 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 
-import App from "./App";
-import { InboxView } from "@/routes/InboxView";
-import { ConversationView } from "@/routes/ConversationView";
-import { TicketsView } from "@/routes/TicketsView";
-import { TicketDetail } from "@/routes/TicketDetail";
-import { ProjectsView } from "@/routes/ProjectsView";
-import { WorkersView } from "@/routes/WorkersView";
-import { SettingsView } from "@/routes/SettingsView";
-import "./index.css";
+import App from "@/App";
+import { FactoryProvider } from "@/factory-store";
+import { IssueDetailPage } from "@/routes/IssueDetailPage";
+import { IssueEditorPage } from "@/routes/IssueEditorPage";
+import { IssuesPage } from "@/routes/IssuesPage";
+import { NotificationsPage } from "@/routes/NotificationsPage";
+import { ProviderPage } from "@/routes/ProviderPage";
+import { PullRequestDetailPage } from "@/routes/PullRequestDetailPage";
+import { PullRequestsPage } from "@/routes/PullRequestsPage";
+import { RunDetailPage } from "@/routes/RunDetailPage";
+import { RunsPage } from "@/routes/RunsPage";
+import "@/index.css";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { retry: 1, refetchOnWindowFocus: false },
-  },
-});
+const router = createBrowserRouter([{ path: "/", element: <App />, children: [
+  { index: true, element: <Navigate to="/issues" replace /> },
+  { path: "issues", element: <IssuesPage /> },
+  { path: "issues/new", element: <IssueEditorPage /> },
+  { path: "issues/:issueId", element: <IssueDetailPage /> },
+  { path: "pulls", element: <PullRequestsPage /> },
+  { path: "pulls/:pullRequestId", element: <PullRequestDetailPage /> },
+  { path: "runs", element: <RunsPage /> },
+  { path: "runs/:runId", element: <RunDetailPage /> },
+  { path: "notifications", element: <NotificationsPage /> },
+  { path: "settings/provider", element: <ProviderPage /> },
+  { path: "*", element: <Navigate to="/issues" replace /> },
+] }]);
 
-const router = createBrowserRouter([
-  {
-    path: "/",
-    element: <App />,
-    children: [
-      { index: true, element: <Navigate to="/inbox" replace /> },
-      { path: "inbox", element: <InboxView /> },
-      { path: "inbox/:id", element: <InboxView /> },
-      { path: "chat", element: <ConversationView /> },
-      { path: "chat/:id", element: <ConversationView /> },
-      { path: "tickets", element: <TicketsView /> },
-      { path: "tickets/:id", element: <TicketDetail /> },
-      { path: "projects", element: <ProjectsView /> },
-      { path: "workers", element: <WorkersView /> },
-      { path: "settings", element: <SettingsView /> },
-      { path: "*", element: <Navigate to="/inbox" replace /> },
-    ],
-  },
-]);
-
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
-  </React.StrictMode>,
-);
+createRoot(document.getElementById("root")!).render(<React.StrictMode><FactoryProvider><RouterProvider router={router} /></FactoryProvider></React.StrictMode>);
