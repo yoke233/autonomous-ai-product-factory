@@ -129,14 +129,16 @@ export function buildApi(store: Store, worker: Worker, clarifier: Clarifier = st
     if (!goal) return reply.code(404).send({ error: "not found" });
     if (goal.status !== "AWAITING_APPROVAL")
       return reply.code(409).send({ error: `cannot approve in status ${goal.status}` });
-    const candidate = await store.getCandidate(id);
+    const [candidate, assessment] = await Promise.all([store.getCandidate(id), store.getAssessment(id)]);
+    if (!candidate || assessment?.candidate_id !== candidate.id || assessment.verdict !== "PASS")
+      return reply.code(409).send({ error: "candidate does not have a PASS assessment" });
     const ok = await store.transitionGoal(id, goal.revision, "DELIVERED", {
       deliveryMode: "ARTIFACT_ONLY",
-      branch: candidate?.branch,
-      headCommit: candidate?.head_commit,
+      branch: candidate.branch,
+      headCommit: candidate.head_commit,
     });
     if (!ok) return reply.code(409).send({ error: "revision conflict, retry" });
-    await store.addEvent(id, "goal.delivered", `已批准交付：分支 ${candidate?.branch ?? "?"}`);
+    await store.addEvent(id, "goal.delivered", `已接收代码产物：分支 ${candidate.branch}`);
     return store.getGoal(id);
   });
 

@@ -84,7 +84,7 @@ export const claudeProducer: Producer = async (ctx) => {
     ``,
     ctx.goal.goal_text,
     ``,
-    `约束：只允许创建/编辑文件完成任务；不要运行构建、测试或任何命令（验证由外部系统负责）；`,
+    `约束：只允许创建/编辑文件完成任务；不要运行构建、测试或任何命令（验证由控制面独立执行）；`,
     `不要修改 .git 目录；完成后直接结束，不需要总结。`,
   ].join("\n");
   // prompt 经 stdin 传入：shell:true 时 argv 不做引号保护，多行/中文 prompt 会被拆散。

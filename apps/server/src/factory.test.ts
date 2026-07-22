@@ -79,6 +79,25 @@ describe("factory main loop (stub producer)", () => {
     expect(assessment?.verdict).toBe("FAIL");
   });
 
+  it("does not deliver a candidate when verification is inconclusive", async () => {
+    const goal = await store.createGoal({
+      repoPath: repo,
+      goalText: "change without verification commands",
+      boundary: { deliveryMode: "ARTIFACT_ONLY", repoProfile: {} },
+    });
+    await worker.tick();
+
+    const after = await store.getGoal(goal.id);
+    expect(after?.status).toBe("NO_SAFE_DELIVERY");
+    const assessment = await store.getAssessment(goal.id);
+    expect(assessment?.verdict).toBe("INCONCLUSIVE");
+
+    const app = buildApi(store, worker);
+    const res = await app.inject({ method: "POST", url: `/api/goals/${goal.id}/approve` });
+    expect(res.statusCode).toBe(409);
+    await app.close();
+  });
+
   it("intake: clarify twice → draft → start creates a RECEIVED goal, then locked", async () => {
     const app = buildApi(store, worker);
 

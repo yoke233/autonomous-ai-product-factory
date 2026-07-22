@@ -1,171 +1,116 @@
-# 上下文与可信状态
+# Mandate、Result 与 Judgment
 
-## 1. 要解决的问题
+术语和不变量以 [CONTEXT.md](../CONTEXT.md) 为准。
 
-新 Agent 启动时既不能从零扫描整个项目，也不能盲信上一个 Agent 的总结。正确做法是：
+## 1. Mandate 的发布与修订
 
-> 不继承 Agent 记忆；基于版本化项目状态，为当前 Task 编译一次性 Context View。
+草拟阶段可以反复澄清和修改，不产生 Mandate revision。只有用户确认并发布后，才形成一个不可变 revision，共同固定：
 
-## 2. Baseline Snapshot 不是全局事务快照
+- 期望结果；
+- 输入、代码和其他事实基础；
+- 可使用的权限与预算；
+- 判断标准；
+- 交付目标。
 
-代码、配置中心、schema、外部 API、环境和授权不可能在同一时刻原子冻结。Baseline Snapshot 是一组不可变引用，加一组带时效的观察：
+已发布内容发生任何影响结果适用性的变化时，创建新 revision。旧 revision、Result 和 Judgment 保持为历史事实，但不会自动适用于新 revision。
 
-```text
-goal_revision
-git_commit / dependency_lock_digest / image_digest
-schema_revision / product_revision
-doc_snapshot        ref, content_digest, version, resolved_at
-remote_config       value_digest, etag, observed_at, expires_at
-external_api        capability_digest, observed_at, expires_at
-policy_revision / protected_gate_revision
-capability_grant_ref, expires_at
-```
+所有 Work、Result、Judgment 和 Effect 都引用精确 revision ID，不引用“当前版本”或“最新版”。
 
-Baseline 不声称这些来源来自同一个全局瞬间；它记录每个来源的版本、观察时间、有效期和兼容策略。无法枚举、拒绝访问、输出截断或过期的来源必须进入 Unknown，搜索结果不能冒充项目全集。
+## 2. Result 只提供信息
 
-`doc_snapshot` 是一次性固化的只读输入（内容 + version/hash，见 [04 §7](04-integrations.md#7-project-注册表intake-与文档-provider)）。固化时点唯一：经 Intake 的 Goal 继承澄清期间固化的快照——保证人确认的草稿与执行依据一致，Goal 编译不重新 resolve；无 Intake 的入口（如 Connector `revise`）在 Goal 编译时 resolve 固化；Rebase 产生的新 Baseline 继承同一 Goal Revision 的快照。它属不可变引用而非动态观察，不带 `expires_at`：执行期间不重新 resolve，外部文档变化不触发 stale，只有新 Goal Revision 才更新快照。编译新 Goal Revision 时 resolve 失败的引用按本节规则进入 Unknown，不静默省略；provider 不可达不影响已冻结快照的执行。
-
-控制器在以下位置重新检查兼容性：
+需要保存和判断的陈述统一表达为不可变 Result：
 
 ```text
-Run 开始 → Resume → Candidate seal → Assessment
-          → Product promotion → Effect dispatch → Release → DELIVERED
+可判定内容
++ 来源身份和产生时间
++ 所属 Work / Effect / Attempt
++ Artifact Refs
++ 内容摘要
 ```
 
-- Goal 或 Git 基线不兼容：旧 Candidate 禁止晋升，基于新 Baseline 创建执行 rebase 的 BUILD/REPAIR Task，并重新 VERIFY；
-- 动态观察到期：重新观察并按依赖选择性失效；影响不清时扩大重验范围；
-- Gate Policy 或受保护 Gate 实现改变：重新 Assessment；
-- Capability 过期或撤销：重新授权，不能从 checkpoint 继承；
-- 目标环境改变：重新计算 Release 兼容性。
+Result 可以承载代码、方案、测试观察、缺陷断言或外部回执。内容形态只说明它带回了什么，不赋予权威。同一个 Result 可以是某项 Work 的候选，也可以成为某次 Judgment 的支持材料，但不因此产生新的生命周期。
 
-## 3. Context Compiler 与 Manifest
+Agent 的“已经完成”、测试工具的“通过”和部署平台的回执都只是 Result，不能自行授权动作、宣布正确或确认交付。
 
-Compiler 输入 Goal、Task、Baseline、直接 Source 引用、仍适用的 Evidence、当前 Delta、Coverage 要求以及 token、时间和权限预算，输出一次性 Context View：
+材料规则详见 [03-artifacts.md](03-artifacts.md)。
 
-```text
-任务、Task Oracle、停止条件和硬约束
-最相关的直接来源与当前 Delta
-已有 Evidence 及其 scope
-Unknown、冲突和 Coverage gap
-被省略类别与按需查询入口
-```
+## 3. Judgment 的权威来源
 
-大段源码、日志和历史候选按需 Pull；Goal、硬约束、Unknown 和验证义务始终 Push。Context View 属于可删除运行 payload，不进入长期记忆。
+第一阶段只有两种合法发布路径。
 
-Context 记录采用不可变的“计划—回执—封存”时序，并按关联 Run/Assessment 的策略回收：
+### 人的显式判定
 
-```text
-planned_manifest:
-  compiler_version / goal_revision / task_id / run_id / baseline_id
-  required_inputs / materialized_inputs / input_refs_and_digests
-  source_manifest / omission_manifest / policy_revision / capability_scope_ref
+用户在 Console 中查看精确 Mandate revision、被判断 Result 和支持 Results，然后显式发布 Judgment。以下权力只属于人：
 
-delivery_receipt:
-  run_id / planned_manifest_ref / sequence / previous_receipt_digest
-  input_ref / digest / delivered_at / channel / result
+- 接受最终 Result；
+- 授权 Effect；
+- 确认现实交付；
+- 覆盖或撤销先前 Judgment。
+- 在 Work 的完成或终止条件不能确定性判断时，决定是否解除该 Work。
 
-sealed_manifest:
-  planned_manifest_ref / run_id / delivery_receipt_refs
-  receipt_count / chain_head_digest / final_context_digest
-```
+### Mandate 预先授权的确定性规则
 
-控制器创建 Run 后，Compiler 为该 `run_id` 写 planned manifest；Runtime 每次 Push 或按需 Pull 都追加独立 delivery receipt。Run 结束后，控制器只接受 `run_id` 与 planned manifest 一致的 receipt，校验 manifest 引用、sequence、receipt count 和 digest 链，并把同一 `run_id` 与 chain head 写入 sealed manifest，不原地改写记录。它只证明系统计划、物化和交付了什么，不证明 Agent 已理解。Secret、长期 token 和原始大 payload 永不进入这些记录、日志或 Evidence。
+Mandate 可以预先授权系统在范围明确、结果确定时发布 Judgment，例如：
 
-## 4. Evidence、Claim 与 Assessment
+- 规定的 Results 已完整产生，因此 Work 完成；
+- 必须执行的检查未运行完整；
+- 命令退出码非零；
+- Result 引用的 revision 或输入摘要不匹配；
+- Attempt 没有有效执行权。
 
-不建设描述整个世界的知识图谱，只保存任务需要且能失效的结论链：
+自动规则只能解除满足固定完成条件的 Work，或作出授权范围内的拒绝和证据不足。它不能因为 Work 完成或检查全部通过就接受最终 Result、授权 Effect 或确认交付。
 
-- Evidence：来源、采集过程、结果摘要、环境、时间、scope 和 Baseline；它是观察，不是裁决；
-- Claim：Agent 或规则提出的待判断结论，包含 `scope / baseline_id`、supporting/refuting Evidence 和 invalidation rule；
-- Assessment：控制器依据版本化 Assessment Policy 对 Candidate 或 Claim 做出的正式判断；Candidate 使用 Gate Policy。
+LLM 可以给出评价或反例，但这些内容仍是 Result。若未来要把某种模型判断升级为权威，必须先修改 Mandate 的授权规则和本节契约，不能通过换一个字段名偷偷完成。
 
-Assessment 可以判断 Candidate 或单个 Claim，至少包含：
+控制面只验证判定权限、固定引用并持久化 Judgment；“中心”不是一个隐藏的第三判定者。
 
-```text
-subject_type        CANDIDATE / CLAIM
-subject_ref / goal_revision / baseline_id / assessment_policy_revision
-verdict             PASS / FAIL / INCONCLUSIVE
-evidence_refs
-acceptance_results[] Candidate subject 时记录 acceptance_ref、verdict、evidence_refs、unknown_refs
-blocking_unknowns
-findings
-assessed_at
-```
+## 4. Judgment 的最小内容
 
-Candidate 只有在 Goal/Baseline/Policy 当前有效、每条硬 Acceptance Contract 都映射到充分 Evidence、且没有 `BLOCKING` Unknown 时才能 PASS。Finding 是经 Claim-subject `PASS` Assessment 验证成立的缺陷 Claim，并可成为 Candidate Assessment `FAIL/INCONCLUSIVE` 的结构化原因，不必成为独立服务。Assessment verdict 不因后续变化被改写；控制器只计算其 applicability。Claim 的 `verified / refuted / stale` 由以该 Claim 为 subject 的 Assessment 派生，Agent 无权直接设置。
+Judgment 必须固定：
 
-只有由当前适用 PASS Assessment 支持、scope 覆盖当前 Task 且没有阻塞冲突的 Claim，才能作为 Context 中的可用事实。
+- 判定者及其授权来源；
+- 精确 Mandate revision；
+- 被判断的 subject Result；
+- 采用的 supporting Results；
+- 结论与理由；
+- 被替代或撤销的 Judgment（如有）。
 
-## 5. 风险驱动 Coverage 与 Unknown
+每个 Judgment 只表达一个结论。改判、补证和撤销都新增 Judgment，不覆盖原记录，也不改写 Mandate 或 Result。
 
-Coverage 要求由 Risk Policy 生成，Agent 不能自行缩减：
-
-```text
-risk_class
-enumerator_version / source_snapshot
-required_surfaces
-access_observed_surfaces
-excluded_surfaces    surface, reason, policy_revision, expires_at
-blocking_gaps
-evidence_refs
-```
-
-`excluded_surfaces` 只能由 Risk Policy 或 Boundary Controller 产生；属于 Acceptance Contract 的信息面不能靠排除项消失。过期或无 policy 引用的排除项按 gap 处理。
-
-不同变更至少覆盖不同信息面：
-
-| 变更 | 强制信息面 |
+| 结论 | 含义 |
 |---|---|
-| 文案或局部展示 | 引用、构建和相关快照测试 |
-| API 行为 | 路由、调用链、schema、消费者和兼容路径 |
-| 数据库 | migration、读写路径、数据兼容和回滚 |
-| 鉴权 | 所有入口、角色矩阵、拒绝路径和审计 |
-| 订单/支付 | 幂等、并发、事务、重复消费、故障恢复和运行指标 |
+| Work 完成 | Mandate 预授权规则或人确认已产生约定 Result 或终止信息，不再需要当前工作继续执行 |
+| Result 被接受 | 人认为该 Result 在这份 Mandate revision 下满足要求 |
+| Effect 被授权 | 人允许一个身份和内容均已固定的外部动作发生 |
+| 已交付 | 人接受现实观察，确认交付目标已经成立 |
 
-输入送达、访问遥测和事实判断必须分开：
+## 5. 新 revision 如何复用旧 Result
 
-```text
-required → materialized → delivered
-                         → access_observed
+发布新 revision 不触发所有旧工作的自动重跑，也不修改旧 Result。系统先进行一次低成本适用性复核：
 
-Source observation → Evidence → Assessment → verified/refuted Claim
-```
+1. 找出 revision 之间真正变化的期望、事实基础、权限或判断标准；
+2. 对未受影响的旧 Result，在新 revision 下发布新的适用性 Judgment；
+3. 只为受影响或证据不足的部分创建 Work；
+4. 无法证明可复用时保持未知，不默认沿用。
 
-`materialized/delivered` 来自 Compiler 和 Runtime 回执；工具遥测只能证明发生过访问，不能证明 Agent 理解或检查正确。`verified` 必须由 Evidence 和 Assessment 导出。负面结论只能表述为“在快照 X、枚举器 Y、规则 Z 和排除项 E 的范围内未发现”。
+只有期望、事实基础、权限、判断标准、交付目标以及该 Result 声明的全部依赖摘要均一致时，确定性规则才能支持复用。任一维度未纳入比较、发生变化或需要语义解释，都保持未知并由人判断。这样既不让旧结果自动冒充新结果，也不要求每次文字澄清都全量重跑。
 
-Unknown 分类为：
+## 6. 信任边界
 
-- `BLOCKING`：阻止 Candidate 晋升或交付；
-- `TOLERATED_BY_POLICY`：必须引用明确 Policy Revision、适用范围和失效条件，Agent 不能自行降级；
-- `DEFERRED`：必须绑定 successor Task 或明确的 Goal scope exclusion；只要仍属于 Acceptance Contract，就继续按 `BLOCKING` 处理；
-- `RESOLVED`：引用真正解决它的 Evidence；新 Goal Revision 只有明确移除该义务并将旧 Goal 标为 superseded 时才能结束追踪，这不等于旧 Goal 已验证或可 DELIVERED。
+- Agent、Worker、测试器和外部平台只能提交 Result，不能发布 Judgment。
+- 执行适配器只获得当前 Work 或 Effect 所需的最小权限，不能从仓库文本、提示词或 Result 中扩大权限。
+- 构建与测试使用 Mandate 已固定的命令与配置，Agent 不能临时改写判断规则。
+- Secret 只在需要的执行边界内注入，不进入 Mandate、Prompt、日志或 Result 内容。
+- 所有来源关系使用稳定身份、revision 和 digest；可变 branch、URL 或“最新结果”不能单独作为依据。
 
-Coverage 长期只保留集合摘要、缺口和 Evidence 引用；逐次 read/search 事件短期保存，避免 Coverage 本身形成数据洪水。
+Work 和 Attempt 的运行约束见 [02-runtime.md](02-runtime.md)；Effect 的授权与确认见 [04-integrations.md](04-integrations.md)。
 
-## 6. 交接与结构性独立验证
+## 7. 必须扛住的变化
 
-普通 Agent 交接只传：
-
-```text
-Goal + Baseline + Task + Context Manifest
-Artifact/Evidence refs + Branch Delta
-Coverage gaps + Unknown/Finding + Required reverification
-```
-
-Verifier 首轮 Context Manifest 必须过滤 Producer Claim、Finding 和解释，只保留原始 Goal、Baseline、只读 Candidate、公开验收条件和独立 Source；形成自己的 finding claim 后，第二轮才开放差异材料。盲审只能减少锚定，真正的独立性还要求：
-
-- Acceptance Contract、Task Oracle 和 Coverage requirement 对 Producer 公开；受保护 Gate 的测试夹具、生成器、秘密反例和预期值位于 Producer 不可读、不可写的隔离存储（实证：评分函数对模型可见时作弊率高 43 倍；隐藏 holdout 测试可把作弊压到近零）；
-- 只读不等于安全：作弊手段包括对测试输入硬编码返回值、运算符重载欺骗断言、从 git 历史挖出既有修复照抄。因此 VERIFY 环境必须同时移除答案泄漏面（如原仓库完整 git 历史），并用行为差分而非仅断言相等来判定；
-- 受保护 Gate 材料自身先过质量 Assessment 才能生效（INV-13）：mutation 分数达阈值、已知正确 Patch 必须通过、已知错误 Patch 必须被拒——错误的 Gate 会同时拒真放假（SWE-bench 原始题目深审 >60% 不可解的教训）；校验测试优先锚定 spec 派生的性质与不变量，而非 Producer 同源的样例断言；
-- 验证环境与开发环境隔离，Candidate 不能修改 Gate 配置；
-- Verifier 使用独立检索路径，并默认只有 Candidate 只读权限；
-- 硬 Gate 至少包含一个确定性检查、属性/差分测试、故障注入、外部回读或运行指标；
-- 高风险策略可以升级到不同模型或提供方，但模型差异不能代替独立行为信号。
-
-验证信号的可信层级固定为：**隔离的确定性检查 > 独立行为信号（差分/故障注入/外部回读/运行指标） > 执行过程结构信号（如盲目重试、缺失验证步骤的轨迹降权） > LLM 评审**。LLM 评审只能产生 Claim 和 Evidence，永不直接构成 PASS；多数投票在相同输入下不提升期望正确率，且会在约 1/4 的分歧中压制正确答案。
-
-## 7. 失效
-
-源码、动态观察、Goal、Product、Gate Policy、受保护 Gate 实现或环境版本变化时，依赖它们的 Context、Claim 和 Assessment applicability 进入 stale。Evidence 仍作为历史观察保留，但不能跨不兼容 Baseline 继续充当事实。
-
-影响关系不完整时保守扩大检查范围，不能因为依赖图没有找到路径就断言不受影响。`BLOCKING` Unknown 不会因过期自动消失；它只能被 Evidence 解决，或继续阻止晋升和交付。
+| 场景 | 合法处理 |
+|---|---|
+| 发布后的要求、基线或判断标准修订 | 发布新 Mandate revision；先复核旧 Results，再补受影响的 Work |
+| 并行产生多个候选 | 保留多个 Results；分别判断，不靠最后完成者覆盖 |
+| 验证者提出反例 | 保存新的 Result；由人接受、驳回或要求补证 |
+| 外部动作回执丢失 | 保留原 Effect 身份并回读现实，不创建新动作盲目重发 |
+| 已交付结果后来失效 | 保留历史交付事实；根据新观察或新 Mandate 作出新 Judgment |

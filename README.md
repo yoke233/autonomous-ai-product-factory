@@ -1,31 +1,44 @@
 # Autonomous AI Product Factory
 
-自主 AI 产品工厂：`人 → AI → 产品`。确定性控制面拥有状态、权限、判断和发布权；Agent 只执行非权威 Task 并提交类型化结果。
+自主 AI 产品工厂：把用户确认的目标转换成经过构建和测试的代码产物。
 
-- 设计总纲：[docs/README.md](docs/README.md)（v0.6，含专题导航与 MVP 阶段）
-- 研究依据：[docs/REFERENCES.md](docs/REFERENCES.md)（2026-07-20 深度研究裁决与来源）
+系统只负责需求澄清、隔离执行、验证和产物交付。部署、上线、回滚和 CI/CD 全部交给专业系统，本项目不集成也不复刻这些能力。
 
-## 状态
+- 设计总纲：[docs/README.md](docs/README.md)
+- 专题文档：[上下文与判断](docs/01-context-and-trust.md) · [运行与恢复](docs/02-runtime.md) · [产物保留](docs/03-artifacts.md) · [外部边界](docs/04-integrations.md)
 
-设计冻结于 v0.6。第一个垂直切片已可用：Web Console 提交 Goal → 隔离 worktree 内 claude 执行 → Candidate 封存 → Repo Profile 验证 → Assessment → 一次批准交付（`ARTIFACT_ONLY`）。
+## 当前状态
+
+第一个垂直闭环已经可运行：
+
+```text
+Web Console 中澄清需求
+  → 确认 Goal
+  → 隔离 worktree 内调用 Claude
+  → 执行仓库声明的构建和测试
+  → 保存 Candidate 与 Assessment
+  → 用户确认接收代码产物
+```
+
+当前 Worker 是单进程轮询实现，PGlite 是本地原型存储。Hatchet、可靠重试、防迟到 attempt token、完整 worktree/进程树清理和子进程环境白名单都尚未实现。后续可以用 Hatchet 接管排队、重试、超时和 Worker 调度，但 Hatchet 不成为业务状态库。
 
 ## 结构
 
 ```text
-apps/server   控制面：PGlite(进程内 Postgres) + Fastify + Worker（Goal/Run 状态机、Runner、验证）
-apps/web      Web Console：React + Vite（Goal 列表/新建/详情/批准）
-docs/         设计文档（总纲 + 4 专题 + 冷参考）
+apps/server   控制面与本地 Worker：Fastify + PGlite
+apps/web      Web Console：React + Vite
+docs/         当前设计及少量专题说明
 ```
 
 ## 开发
 
-TypeScript / Node ≥22 / pnpm。
+TypeScript / Node >= 22 / pnpm。
 
-```bash
+```powershell
 pnpm install
-pnpm dev         # 同时起 server(:3400) 与 web console(:3401)
+pnpm dev
 pnpm typecheck
 pnpm test
 ```
 
-环境变量：`FACTORY_RUNNER=stub` 用桩 Producer（不调模型）；`FACTORY_PORT`、`FACTORY_DATA_DIR` 可覆盖默认。执行真实 Goal 需要本机可用的 `claude` CLI。
+`FACTORY_RUNNER=stub` 使用桩执行器；真实执行需要本机可用的 `claude` CLI。`FACTORY_PORT` 和 `FACTORY_DATA_DIR` 可覆盖默认配置。

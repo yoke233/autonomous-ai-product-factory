@@ -5,7 +5,7 @@ import type { Verdict } from "./types.js";
 /**
  * 单进程 Worker：轮询认领 QUEUED Run 并驱动主链路
  * RECEIVED → RUNNING → AWAITING_APPROVAL | NO_SAFE_DELIVERY | SYSTEM_FAULT。
- * 发布批准始终留给 Console（M2 监督式语义）。
+ * Candidate 是否被接收始终由 Console 中的用户确认。
  */
 export class Worker {
   private timer: NodeJS.Timeout | null = null;
@@ -94,15 +94,19 @@ export class Worker {
 
       const fresh = await store.getGoal(goalId);
       if (!fresh || fresh.status === "CANCELLED") return;
-      if (verdict === "FAIL") {
+      if (verdict !== "PASS") {
         await store.transitionGoal(goalId, fresh.revision, "NO_SAFE_DELIVERY", {
-          reason: "verification failed",
+          reason: verdict === "FAIL" ? "verification failed" : "verification inconclusive",
           failedChecks: failed.map((c) => c.name),
         });
-        await store.addEvent(goalId, "goal.no_safe_delivery", "验证失败，不产生可交付候选");
+        await store.addEvent(
+          goalId,
+          "goal.no_safe_delivery",
+          verdict === "FAIL" ? "验证失败，不产生可交付候选" : "缺少有效验证命令，无法交付候选",
+        );
       } else {
         await store.transitionGoal(goalId, fresh.revision, "AWAITING_APPROVAL");
-        await store.addEvent(goalId, "goal.awaiting_approval", "等待发布批准（Console 一次批准制）");
+        await store.addEvent(goalId, "goal.awaiting_approval", "等待用户确认接收代码产物");
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
